@@ -4,6 +4,10 @@
 #include <memory>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
+#include <algorithm>
+#include <cmath>
+#include <ctime>
 #include "httplib.h"
 #include "json.hpp"
 #include "Models.h"
@@ -79,43 +83,97 @@ int main() {
     svr.Post("/api/auth/send-otp", [&db](const httplib::Request& req, httplib::Response& res) {
         try {
             auto body = json::parse(req.body);
+    
             std::string email = body.value("email", "");
             std::string purpose = body.value("purpose", "REGISTER");
-
-            if (email.empty() || email.find('@') == std::string::npos) {
+    
+            // Kiểm tra email cơ bản
+            if (email.empty() ||
+                email.find('@') == std::string::npos ||
+                email.find('.') == std::string::npos) {
+    
                 res.status = 400;
-                res.set_content(json({{"status", "error"}, {"message", "Địa chỉ email không hợp lệ!"}}).dump(), "application/json; charset=utf-8");
-                return;
-            }
-
-            std::string otpCode = SmtpService::generate6DigitOtp();
-            if (!db.saveOtp(email, otpCode, purpose, 300)) {
-                res.status = 500;
-                res.set_content(json({{"status", "error"}, {"message", "Lỗi lưu mã OTP vào cơ sở dữ liệu!"}}).dump(), "application/json; charset=utf-8");
-                return;
-            }
-
-            SmtpService::sendOtpEmail(email, otpCode, purpose == "REGISTER" ? "Xác thực đăng ký tài khoản" : "Xác thực đăng nhập");
-
-            json resp = {
-                {"status", "ok"},
-                {"message", "Mã xác thực 6 chữ số đã được tạo và gửi tới Gmail: " + email},
-                json resp = {
-                    {"status", "ok"},
-                    {"message", "Ma OTP da duoc gui den email."}
-                };
-                
                 res.set_content(
-                    resp.dump(),
+                    json({
+                        {"status", "error"},
+                        {"message", "Địa chỉ email không hợp lệ!"}
+                    }).dump(),
                     "application/json; charset=utf-8"
                 );
+                return;
+            }
+    
+            // Chỉ chấp nhận các mục đích OTP hợp lệ
+            if (purpose != "REGISTER" && purpose != "LOGIN") {
+                res.status = 400;
+                res.set_content(
+                    json({
+                        {"status", "error"},
+                        {"message", "Mục đích xác thực không hợp lệ!"}
+                    }).dump(),
+                    "application/json; charset=utf-8"
+                );
+                return;
+            }
+    
+            // Tạo OTP 6 chữ số
+            std::string otpCode = SmtpService::generate6DigitOtp();
+    
+            // Lưu OTP với thời hạn 300 giây
+            if (!db.saveOtp(email, otpCode, purpose, 300)) {
+                res.status = 500;
+                res.set_content(
+                    json({
+                        {"status", "error"},
+                        {"message", "Không thể lưu mã xác thực!"}
+                    }).dump(),
+                    "application/json; charset=utf-8"
+                );
+                return;
+            }
+    
+            // Gửi email OTP
+            SmtpService::sendOtpEmail(
+                email,
+                otpCode,
+                purpose == "REGISTER"
+                    ? "Xác thực đăng ký tài khoản"
+                    : "Xác thực đăng nhập"
+            );
+    
+            // Phản hồi cho frontend, tuyệt đối không trả OTP
+            json resp = {
+                {"status", "ok"},
+                {"message", "Mã xác thực đã được gửi đến email của bạn."}
             };
-            res.set_content(resp.dump(), "application/json; charset=utf-8");
-        } catch (const std::exception& e) {
+    
+            res.set_content(
+                resp.dump(),
+                "application/json; charset=utf-8"
+            );
+    
+        } catch (const nlohmann::json::exception&) {
             res.status = 400;
-            res.set_content(json({{"status", "error"}, {"message", e.what()}}).dump(), "application/json; charset=utf-8");
+            res.set_content(
+                json({
+                    {"status", "error"},
+                    {"message", "Dữ liệu JSON không hợp lệ!"}
+                }).dump(),
+                "application/json; charset=utf-8"
+            );
+    
+        } catch (const std::exception&) {
+            res.status = 500;
+            res.set_content(
+                json({
+                    {"status", "error"},
+                    {"message", "Không thể xử lý yêu cầu gửi OTP!"}
+                }).dump(),
+                "application/json; charset=utf-8"
+            );
         }
     });
+
 
     svr.Post("/api/auth/register-with-otp", [&db](const httplib::Request& req, httplib::Response& res) {
         try {
