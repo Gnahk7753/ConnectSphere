@@ -61,19 +61,39 @@ int main() {
         std::cerr << "Loi khoi tao Database!" << std::endl;
         return 1;
     }
-    std::cout << "[Database] SQLite Database đã sẵn sàng tại data/social_network.db" << std::endl;
+    std::cout << "[Database] SQLite Database đã sẵn sàng tại: "
+          << dbPath << std::endl;
 
     httplib::Server svr;
     svr.set_mount_point("/", "./static");
 
     svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", "*");
-        res.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    
+        const char* allowedOrigin = std::getenv("ALLOWED_ORIGIN");
+    
+        if (allowedOrigin != nullptr && std::string(allowedOrigin).length() > 0) {
+            res.set_header("Access-Control-Allow-Origin", allowedOrigin);
+            res.set_header("Vary", "Origin");
+        } else {
+            // Chỉ dùng khi phát triển trên máy cá nhân
+            res.set_header("Access-Control-Allow-Origin", "*");
+        }
+    
+        res.set_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, PUT, DELETE, OPTIONS"
+        );
+    
+        res.set_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization"
+        );
+    
         if (req.method == "OPTIONS") {
             res.status = 200;
             return httplib::Server::HandlerResponse::Handled;
         }
+    
         return httplib::Server::HandlerResponse::Unhandled;
     });
 
