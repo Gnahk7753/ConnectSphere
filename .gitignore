@@ -1,0 +1,30 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Email credentials
+email_config.json
+config.json
+
+# Test accounts
+tai_khoan_test.txt
+
+# Temporary files
+gemini_req.json
+gemini_res.json
+send_otp_temp.ps1
+
+# Build
+/build/
+server
+server.exe
+server_linux
+
+# IDE
+.vscode/
