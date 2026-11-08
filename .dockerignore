@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+server.exe
+build/
+.vscode/
+tai_khoan_test.txt
+email_config.json
+config.json
