@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tìm kiếm - Mạng Xã Hội MIni</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="img/default-avatar.svg" type="image/svg+xml">
+</head>
+<body>
+  <!-- ================= HEADER / NAVBAR ================= -->
+  <header class="navbar">
+    <div class="nav-left">
+      <a href="index.html" class="logo-container">
+        <div class="logo-icon logo-svg-box">
+          <svg width="34" height="34" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M14 20C14 11.1634 21.1634 4 30 4H70C78.8366 4 86 11.1634 86 20V62C86 70.8366 78.8366 78 70 78H36L14 94L20 78H30C21.1634 78 14 70.8366 14 62V20Z" fill="#6c2bd9"/>
+            <line x1="50" y1="28" x2="30" y2="58" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="30" y1="58" x2="70" y2="58" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="70" y1="58" x2="50" y2="28" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="50" cy="28" r="10" fill="#f59e0b"/>
+            <circle cx="50" cy="28" r="4.5" fill="white"/>
+            <circle cx="30" cy="58" r="10" fill="#ec4899"/>
+            <circle cx="30" cy="58" r="4.5" fill="white"/>
+            <circle cx="70" cy="58" r="10" fill="#10b981"/>
+            <circle cx="70" cy="58" r="4.5" fill="white"/>
+          </svg>
+        </div>
+        <span>Mạng Xã Hội MIni</span>
+      </a>
+      
+      <!-- Hộp Tìm kiếm với Gợi ý thời gian thực (Hình 3) -->
+      <div class="search-box-wrapper">
+        <div class="search-box">
+          <span>🔍</span>
+          <input type="text" id="searchInput" placeholder="Tìm kiếm bạn bè, nhóm, bài viết..." autocomplete="off"
+                 oninput="app.handleSearchInput(this.value)"
+                 onkeydown="if(event.key === 'Enter') app.navigateToSearchPage(this.value)">
+        </div>
+        <div class="search-suggestions-dropdown" id="searchSuggestionsDropdown" style="display: none;"></div>
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <!-- Chuyển đổi Dark Mode -->
+      <button class="btn-icon theme-toggle" id="themeToggleBtn" title="Chuyển chế độ Sáng / Tối">🌙</button>
+
+      <!-- Nút Quản trị Admin (nếu là Admin) -->
+      <a href="admin.html" class="btn-icon" id="adminPanelBtn" title="Trang Quản Trị Viên" style="display: none; text-decoration: none;">🛡️</a>
+
+      <!-- Thông báo cái chuông (Hình 4) -->
+      <div class="nav-dropdown-wrapper">
+        <button class="btn-icon" id="notificationBtn" title="Thông báo" onclick="app.toggleNotificationDropdown()">
+          🔔
+          <span class="badge-counter" id="unreadNotifCount" style="display: none;">0</span>
+        </button>
+        <div class="notif-dropdown" id="notificationDropdown" style="display: none;">
+          <div class="notif-dropdown-header">
+            <h4>Thông báo</h4>
+            <button onclick="app.markAllNotificationsRead()">Đã đọc tất cả</button>
+          </div>
+          <div class="notif-list" id="notifList">
+            <div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">Không có thông báo mới</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lời mời kết bạn -->
+      <a href="friends.html?tab=requests" class="btn-icon" title="Lời mời kết bạn" style="text-decoration: none;">
+        👥
+        <span class="badge-counter" id="friendRequestsCount" style="display: none;">0</span>
+      </a>
+
+      <!-- Badge tài khoản -->
+      <div class="user-nav-badge" id="navUserBadge" onclick="app.openMyProfile()">
+        <img id="navAvatar" src="/img/default-avatar.svg" alt="Avatar">
+        <span id="navFullname">Đang tải...</span>
+      </div>
+
+      <!-- Đăng xuất -->
+      <button class="btn-icon" id="logoutBtn" title="Đăng xuất" style="color: var(--accent-red);">🚪</button>
+    </div>
+  </header>
+
+  <!-- ================= LAYOUT TRANG TÌM KIẾM CÓ BỘ LỌC (HÌNH 4) ================= -->
+  <main class="search-page-wrapper">
+    <!-- CỘT TRÁI: BỘ LỌC TÌM KIẾM (HÌNH 4) -->
+    <aside class="search-filter-card">
+      <h3>Bộ lọc tìm kiếm</h3>
+      <ul class="search-filter-list">
+        <li>
+          <button class="search-filter-btn active" id="btnFilterAll" onclick="app.changeSearchFilter('ALL')">
+            <span>🔍</span> Tất cả
+          </button>
+        </li>
+        <li>
+          <button class="search-filter-btn" id="btnFilterPeople" onclick="app.changeSearchFilter('PEOPLE')">
+            <span>👤</span> Mọi người
+          </button>
+        </li>
+        <li>
+          <button class="search-filter-btn" id="btnFilterGroups" onclick="app.changeSearchFilter('GROUPS')">
+            <span>👥</span> Nhóm
+          </button>
+        </li>
+        <li>
+          <button class="search-filter-btn" id="btnFilterPosts" onclick="app.changeSearchFilter('POSTS')">
+            <span>📝</span> Bài viết
+          </button>
+        </li>
+      </ul>
+    </aside>
+
+    <!-- CỘT PHẢI: KẾT QUẢ TÌM KIẾM -->
+    <section class="search-results-container">
+      <div style="background: var(--bg-surface); padding: 1rem 1.25rem; border-radius: 10px; border: 1px solid var(--border-color); box-shadow: var(--card-shadow);">
+        <h2 style="font-size: 1.25rem;">Kết quả tìm kiếm cho: <span id="searchQueryLabel" style="color: var(--primary);">"..."</span></h2>
+      </div>
+
+      <!-- Khu vực hiển thị kết quả -->
+      <div id="searchResultsList" style="display: flex; flex-direction: column; gap: 1rem;">
+        <div style="text-align: center; padding: 2rem; color: var(--text-muted); background: var(--bg-surface); border-radius: 10px; border: 1px solid var(--border-color);">
+          Đang tìm kiếm dữ liệu...
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ================= POP-UP CHAT ================= -->
+  <div class="chat-window" id="chatWindow" style="display: none;">
+    <div class="chat-header">
+      <div class="chat-partner-info" onclick="app.openUserProfile(app.currentChatPartner)">
+        <img id="chatPartnerAvatar" src="/img/default-avatar.svg" alt="Avatar">
+        <div>
+          <div class="chat-partner-name" id="chatPartnerName">Tên bạn bè</div>
+          <div id="chatPartnerStatus" style="font-size: 0.72rem; color: var(--accent-green);">Đang hoạt động</div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.3rem;">
+        <!-- Nút 3 chấm xem thêm tính năng -->
+        <div class="chat-more-menu-container">
+          <button class="btn-icon" style="width: 28px; height: 28px;" onclick="app.toggleChatMenu()" title="Tùy chọn">•••</button>
+          <div class="chat-more-dropdown" id="chatMoreDropdown">
+            <button onclick="app.chatActionSearchMessages()">🔍 Tìm kiếm tin nhắn</button>
+            <button onclick="app.chatActionSetNickname()" id="chatMenuNicknameBtn">✏️ Đặt biệt danh</button>
+            <button onclick="app.chatActionCreateGroup()" id="chatMenuGroupBtn">👥 Tạo nhóm với bạn này</button>
+            <button onclick="app.chatActionRenameGroup()" id="chatMenuRenameGroupBtn" style="display:none">✏️ Đổi tên nhóm</button>
+            <button onclick="app.changeGroupAvatar(); app.toggleChatMenu();" id="chatMenuChangeAvatarBtn" style="display:none">🖼️ Đổi ảnh nhóm</button>
+            <button onclick="app.chatActionViewMembers()" id="chatMenuMembersBtn" style="display:none">👥 Xem thành viên</button>
+            <button onclick="app.chatActionAddMember()" id="chatMenuAddMemberBtn" style="display:none">➕ Thêm thành viên</button>
+            <button onclick="app.chatActionRemoveMember()" id="chatMenuRemoveMemberBtn" style="display:none">➖ Xóa thành viên</button>
+            <button onclick="app.chatActionClearMessages()">🗑️ Xóa đoạn chat</button>
+            <button onclick="app.chatActionLeaveGroup()" id="chatMenuLeaveBtn" style="display:none; color: var(--accent-red);">🚪 Rời khỏi nhóm</button>
+            <button onclick="app.chatActionBlockUser()" id="chatMenuBlockBtn">🚫 Chặn người dùng</button>
+            <button onclick="app.chatActionReportUser()" style="color: var(--accent-red);">🚩 Báo cáo vi phạm</button>
+          </div>
+        </div>
+        <button class="btn-icon" style="width: 28px; height: 28px;" onclick="app.closeChat()">✕</button>
+      </div>
+    </div>
+    <div class="chat-body" id="chatBody">
+      <div id="messagesList"></div>
+    </div>
+    <div class="chat-footer">
+      <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
+      <button onclick="app.sendChatMessage()">➤</button>
+    </div>
+  </div>
+
+  <!-- ================= MODAL XEM BÌNH LUẬN (Hình 2 & 5) ================= -->
+  <div class="modal-overlay" id="commentModal" style="display: none;">
+    <div class="comment-modal-dialog">
+      <div class="comment-modal-header">
+        <span id="commentModalTitle">Bài viết</span>
+        <button class="btn-icon" onclick="app.closeCommentModal()">✕</button>
+      </div>
+      <div class="comment-modal-body" id="commentModalBody">
+        <div class="comment-modal-post-author">
+          <img id="cmtPostAuthorAvatar" src="/img/default-avatar.svg" alt="Avatar">
+          <div>
+            <div style="font-weight: 700; font-size: 0.95rem;" id="cmtPostAuthorName">--</div>
+            <div style="font-size: 0.78rem; color: var(--text-muted);" id="cmtPostTime">--</div>
+          </div>
+        </div>
+        <div class="comment-modal-post-content" id="cmtPostContent"></div>
+        <div class="comment-modal-post-media" id="cmtPostMedia"></div>
+        <div class="comment-modal-stats">
+          <div id="cmtModalReactionsCluster"></div>
+          <div><span id="cmtModalCommentsCount">0</span> bình luận</div>
+        </div>
+        <div class="comment-modal-actions" id="cmtModalActionsBar"></div>
+        <div class="comment-list-container" id="cmtModalListContainer"></div>
+      </div>
+      <div class="comment-modal-footer">
+        <div class="replying-indicator" id="replyingIndicator" style="display: none;">
+          <span>Đang trả lời: <strong id="replyingTargetName">@nguoidung</strong></span>
+          <button onclick="app.cancelReplyComment()">✕</button>
+        </div>
+        <div class="comment-input-row">
+          <img id="cmtMyAvatar" src="/img/default-avatar.svg" alt="My avatar">
+          <input type="text" id="modalCommentInput" placeholder="Viết bình luận công khai..." onkeypress="if(event.key === 'Enter') app.submitCommentFromModal()">
+          <button onclick="app.submitCommentFromModal()">➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL BÁO CÁO VI PHẠM ================= -->
+  <div class="modal-overlay" id="reportModal" style="display: none;">
+    <div class="auth-card" style="max-width: 420px; width: 92%;">
+      <div class="auth-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+        <h2 id="reportModalHeading" style="font-size: 1.25rem;">🚩 Báo cáo vi phạm</h2>
+        <button type="button" class="btn-close-modal" onclick="app.closeReportModal()" style="background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--text-muted);" title="Đóng">✖</button>
+      </div>
+      <p id="reportModalSubHeading" style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">Báo cáo sẽ được chuyển thẳng tới Quản trị viên hệ thống xử lý</p>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Lý do báo cáo:</label>
+        <select id="reportReasonSelect" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
+          <option value="Spam / Tin rác">Spam / Tin rác</option>
+          <option value="Nội dung thô lỗ, xúc phạm">Nội dung thô lỗ, xúc phạm</option>
+          <option value="Tài khoản giả mạo người khác">Tài khoản giả mạo người khác</option>
+          <option value="Hành vi lừa đảo">Hành vi lừa đảo</option>
+          <option value="Khác">Lý do khác...</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom: 1rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Chi tiết thêm:</label>
+        <textarea id="reportDetailInput" style="width: 100%; border-radius: 8px; padding: 0.6rem 0.8rem; background: var(--bg-surface-secondary); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 0.9rem;" placeholder="Mô tả cụ thể sự việc..."></textarea>
+      </div>
+      <div style="display: flex; gap: 0.5rem;">
+        <button type="button" class="btn-secondary" style="flex: 1;" onclick="app.closeReportModal()">Hủy</button>
+        <button type="button" class="btn-primary" style="flex: 1; background-color: var(--accent-red); border-color: var(--accent-red);" onclick="app.submitReport()">Gửi báo cáo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL ĐỔI TÊN NHÓM ================= -->
+  <div class="modal-overlay" id="renameGroupModal" style="display:none; z-index: 2050;">
+    <div class="auth-card" style="max-width:400px; width: 92%;">
+      <div class="auth-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="font-size: 1.2rem; font-weight: 700; margin: 0;">✏️ Đổi tên nhóm</h2>
+        <button class="btn-icon" onclick="document.getElementById('renameGroupModal').style.display='none'" style="cursor: pointer;">✕</button>
+      </div>
+      <div class="form-group" style="margin-bottom: 1.2rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Tên nhóm mới:</label>
+        <input type="text" id="renameGroupInput" placeholder="Nhập tên nhóm mới..." maxlength="60" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <button class="btn-secondary" style="flex:1" onclick="document.getElementById('renameGroupModal').style.display='none'">Hủy</button>
+        <button class="btn-primary" style="flex:1" onclick="app.submitRenameGroup()">Lưu tên nhóm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- SCRIPTS -->
+  <script src="js/vietnamData.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const query = urlParams.get("q") || "";
+      const filter = urlParams.get("filter") || "ALL";
+      if (app && app.initSearchPage) {
+        app.initSearchPage(query, filter);
+      }
+    });
+  </script>
+</body>
+</html>

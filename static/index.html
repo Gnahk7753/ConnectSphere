@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mạng Xã Hội MIni</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
+  <!-- Google Identity Services (Google Sign-In) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+
+  <!-- ================= TOP NAVIGATION BAR ================= -->
+  <header class="navbar">
+    <div class="nav-left">
+      <a href="index.html" class="logo-container">
+        <div class="logo-icon logo-svg-box">
+          <svg width="34" height="34" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M14 20C14 11.1634 21.1634 4 30 4H70C78.8366 4 86 11.1634 86 20V62C86 70.8366 78.8366 78 70 78H36L14 94L20 78H30C21.1634 78 14 70.8366 14 62V20Z" fill="#6c2bd9"/>
+            <line x1="50" y1="28" x2="30" y2="58" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="30" y1="58" x2="70" y2="58" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="70" y1="58" x2="50" y2="28" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="50" cy="28" r="10" fill="#f59e0b"/>
+            <circle cx="50" cy="28" r="4.5" fill="white"/>
+            <circle cx="30" cy="58" r="10" fill="#ec4899"/>
+            <circle cx="30" cy="58" r="4.5" fill="white"/>
+            <circle cx="70" cy="58" r="10" fill="#10b981"/>
+            <circle cx="70" cy="58" r="4.5" fill="white"/>
+          </svg>
+        </div>
+        <span>Mạng Xã Hội MIni</span>
+      </a>
+      
+      <!-- Hộp Tìm kiếm với Gợi ý thời gian thực (Hình 3) -->
+      <div class="search-box-wrapper">
+        <div class="search-box">
+          <span>🔍</span>
+          <input type="text" id="searchInput" placeholder="Tìm kiếm bạn bè, nhóm, bài viết..." autocomplete="off"
+                 oninput="app.handleSearchInput(this.value)"
+                 onkeydown="if(event.key === 'Enter') app.navigateToSearchPage(this.value)">
+        </div>
+        <div class="search-suggestions-dropdown" id="searchSuggestionsDropdown" style="display: none;"></div>
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <!-- Nút Chuyển đổi Chế độ Sáng / Tối -->
+      <button class="btn-icon theme-toggle" id="themeToggleBtn" title="Chuyển chế độ Sáng / Tối">
+        🌙
+      </button>
+
+      <!-- Nút Quản trị Admin (nếu là Admin) -->
+      <a href="admin.html" class="btn-icon" id="adminPanelBtn" title="Trang Quản Trị Viên" style="display: none; text-decoration: none;">
+        🛡️
+      </a>
+
+      <!-- Thông báo cái chuông (Hình 4) -->
+      <div class="nav-dropdown-wrapper">
+        <button class="btn-icon" id="notificationBtn" title="Thông báo" onclick="app.toggleNotificationDropdown()">
+          🔔
+          <span class="badge-counter" id="unreadNotifCount" style="display: none;">0</span>
+        </button>
+        <div class="notif-dropdown" id="notificationDropdown" style="display: none;">
+          <div class="notif-dropdown-header">
+            <h4>Thông báo</h4>
+            <button onclick="app.markAllNotificationsRead()">Đã đọc tất cả</button>
+          </div>
+          <div class="notif-list" id="notifList">
+            <div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">Không có thông báo mới</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Nút Lời mời kết bạn -->
+      <a href="friends.html?tab=requests" class="btn-icon" id="friendRequestsBtn" title="Lời mời kết bạn" style="text-decoration: none;">
+        👥
+        <span class="badge-counter" id="friendRequestsCount" style="display: none;">0</span>
+      </a>
+
+      <!-- Nút Tin nhắn -->
+      <button class="btn-icon" id="quickChatBtn" title="Tin nhắn">
+        💬
+      </button>
+
+      <!-- Badge người dùng đăng nhập -->
+      <div class="user-nav-badge" id="navUserBadge" onclick="app.openMyProfile()">
+        <img id="navAvatar" src="/img/default-avatar.svg" alt="Avatar">
+        <span id="navFullname">Đang tải...</span>
+      </div>
+
+      <!-- Nút Đăng xuất -->
+      <button class="btn-icon" id="logoutBtn" title="Đăng xuất" style="color: var(--accent-red);">
+        🚪
+      </button>
+    </div>
+  </header>
+
+  <!-- ================= MAIN LAYOUT ================= -->
+  <main class="main-wrapper">
+    <!-- CỘT TRÁI: HỒ SƠ & MENU ĐIỀU HƯỚNG (Theo đúng 4 mục yêu cầu) -->
+    <aside class="sidebar">
+      <div class="user-profile-card">
+        <img id="sideAvatar" src="/img/default-avatar.svg" alt="Avatar" onclick="app.openAvatarUploadModal()" title="Nhấn để đổi ảnh đại diện">
+        <h3 id="sideFullname" onclick="app.openMyProfile()" style="cursor: pointer;">Họ và tên</h3>
+        <p class="bio" id="sideBio">Tiểu sử của bạn...</p>
+        <button class="btn-secondary" style="width: 100%; font-size: 0.8rem;" onclick="app.openEditProfileModal()">
+          ✏️ Chỉnh sửa hồ sơ
+        </button>
+
+        <div class="profile-meta">
+          <div>📍 Quê quán: <strong id="sideHometown">--</strong></div>
+          <div>🏠 Nơi đang ở: <strong id="sideResidence">--</strong></div>
+          <div>🎓 Trường học: <strong id="sideSchool">--</strong></div>
+          <div>💼 Nơi làm việc: <strong id="sideWorkplace">--</strong></div>
+          <div>🎯 Sở thích: <strong id="sideInterests">--</strong></div>
+          <div>🚻 Giới tính: <strong id="sideGender">--</strong></div>
+        </div>
+      </div>
+
+      <!-- Menu bên trái 4 mục: Bảng tin chính, Bạn bè, Hỗ trợ, Quản trị viên -->
+      <ul class="sidebar-menu">
+        <li class="active"><a href="index.html">📰 Bảng tin chính</a></li>
+        <li><a href="friends.html">👥 Bạn bè</a></li>
+        <li onclick="app.openSupportModal()"><a href="#">🛠️ Hỗ trợ</a></li>
+        <li id="sideAdminItem" style="display: none;"><a href="admin.html">🛡️ Quản trị viên</a></li>
+      </ul>
+    </aside>
+
+    <!-- CỘT GIỮA: BẢNG TIN VÀ ĐĂNG BÀI VIẾT (CÓ ẢNH & VIDEO) -->
+    <section class="feed-container">
+      <div class="create-post-card">
+        <div class="create-post-top">
+          <img id="postCreateAvatar" src="/img/default-avatar.svg" alt="Avatar">
+          <div class="create-post-input-container">
+            <input type="text" id="postTitleInput" class="create-post-title-input" placeholder="Tiêu đề..." maxlength="100">
+            <textarea id="postContentInput" class="create-post-textarea" placeholder="Bạn đang nghĩ gì thế? Chia sẻ câu chuyện hoặc khoảnh khắc hôm nay..." maxlength="1000"></textarea>
+          </div>
+        </div>
+
+        <!-- Khung xem trước ảnh / video đính kèm -->
+        <div class="media-preview-container" id="mediaPreviewContainer">
+          <button class="btn-remove-media" onclick="app.clearPostMedia()">✕</button>
+          <img id="postImagePreview" style="display: none;" src="" alt="Preview">
+          <video id="postVideoPreview" style="display: none;" controls src=""></video>
+        </div>
+
+        <div class="create-post-bottom">
+          <div class="media-actions">
+            <!-- Nút đính kèm ảnh -->
+            <label class="btn-attach" title="Đính kèm hình ảnh">
+              📷 Thêm ảnh
+              <input type="file" id="postImageFile" accept="image/*" style="display: none;" onchange="app.handleImageAttachment(this)">
+            </label>
+            <!-- Nút đính kèm video -->
+            <label class="btn-attach" title="Đính kèm video">
+              🎥 Thêm video
+              <input type="file" id="postVideoFile" accept="video/*" style="display: none;" onchange="app.handleVideoAttachment(this)">
+            </label>
+            <!-- Chọn chế độ hiển thị bài đăng -->
+            <select id="postVisibilitySelect" class="post-visibility-select" title="Quyền riêng tư">
+              <option value="PUBLIC">🌐 Công khai</option>
+              <option value="FRIENDS">👥 Bạn bè</option>
+              <option value="PRIVATE">🔒 Chỉ mình tôi</option>
+            </select>
+          </div>
+          <button class="btn-primary" onclick="app.createPost()">
+            ✍️ Đăng bài viết
+          </button>
+        </div>
+      </div>
+
+      <!-- Danh sách bài viết trên News Feed -->
+      <div id="postsList">
+        <div style="text-align: center; padding: 2rem; color: var(--text-muted);">Đang tải bảng tin...</div>
+      </div>
+    </section>
+
+    <!-- CỘT PHẢI: GỢI Ý KẾT BẠN & ĐOẠN CHAT (BẠN BÈ & NHÓM) -->
+    <aside class="right-sidebar">
+      <!-- Widget Gợi ý bạn bè (Có bộ lọc và nút xem thêm) -->
+      <div class="widget-card">
+        <div class="widget-title">
+          <span>Gợi ý kết bạn</span>
+        </div>
+        <div class="suggestion-filter-tabs" id="suggestionFilterTabs">
+          <button class="suggestion-filter-pill active" onclick="app.filterSuggestionsTab('ALL', this)">Tất cả</button>
+          <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('SCHOOL', this)">Cùng trường</button>
+          <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('HOMETOWN', this)">Cùng quê</button>
+          <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('INTERESTS', this)">Chung sở thích</button>
+          <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('MUTUAL', this)">Bạn của bạn bè</button>
+        </div>
+        <div class="suggestion-list" id="suggestionsContainer">
+          <div style="font-size: 0.85rem; color: var(--text-muted);">Đang tìm kiếm người quen...</div>
+        </div>
+        <div style="text-align: center; margin-top: 0.6rem;">
+          <button class="btn-text" id="btnLoadMoreSuggestionsFeed" onclick="app.loadMoreSuggestionsFeed()" style="font-size: 0.8rem; color: var(--primary); font-weight: 600;">
+            ⬇️ Xem thêm gợi ý
+          </button>
+        </div>
+      </div>
+
+      <!-- Widget Danh sách Đoạn Chat (Bạn bè & Nhóm chat) -->
+      <div class="widget-card">
+        <div class="widget-title">
+          <span>Đoạn Chat</span>
+          <button class="btn-create-group-chat" onclick="app.openCreateGroupModal([])" title="Tạo nhóm mới">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <line x1="19" y1="8" x2="19" y2="14"/>
+              <line x1="22" y1="11" x2="16" y2="11"/>
+            </svg>
+            <span>Tạo nhóm</span>
+          </button>
+        </div>
+        <div class="chat-filter-pills">
+          <button class="chat-filter-pill active" onclick="app.filterContacts('all', this)">Tất cả</button>
+          <button class="chat-filter-pill" onclick="app.filterContacts('friends', this)">Bạn bè</button>
+          <button class="chat-filter-pill" onclick="app.filterContacts('unread', this)">Chưa đọc</button>
+          <button class="chat-filter-pill" onclick="app.filterContacts('groups', this)">Nhóm Chat</button>
+        </div>
+        <div class="suggestion-list" id="contactsContainer">
+          <!-- Render tự động bởi JS -->
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ================= POP-UP CHAT SỬA LỖI HIỂN THỊ (Hình 1) ================= -->
+  <div class="chat-window" id="chatWindow" style="display: none;">
+    <div class="chat-header">
+      <div class="chat-partner-info">
+        <img id="chatPartnerAvatar" src="/img/default-avatar.svg" alt="Avatar" class="group-avatar-clickable"
+             onclick="app.onChatAvatarClick(event)" title="Nhấn để xem ảnh lớn">
+        <div onclick="app.onChatPartnerNameClick(event)" style="cursor:pointer;">
+          <div class="chat-partner-name" id="chatPartnerName">Tên bạn bè</div>
+          <div id="chatPartnerStatus" style="font-size: 0.72rem; color: var(--accent-green);">Đang hoạt động</div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.3rem;">
+        <!-- Nút 3 chấm xem thêm tính năng -->
+        <div class="chat-more-menu-container">
+          <button class="btn-icon" style="width: 28px; height: 28px;" onclick="app.toggleChatMenu()" title="Tùy chọn">•••</button>
+          <div class="chat-more-dropdown" id="chatMoreDropdown">
+            <button onclick="app.chatActionSearchMessages()">🔍 Tìm kiếm tin nhắn</button>
+            <button onclick="app.chatActionSetNickname()" id="chatMenuNicknameBtn">✏️ Đặt biệt danh</button>
+            <button onclick="app.chatActionCreateGroup()" id="chatMenuGroupBtn">👥 Tạo nhóm với bạn này</button>
+            <button onclick="app.chatActionRenameGroup()" id="chatMenuRenameGroupBtn" style="display:none">✏️ Đổi tên nhóm</button>
+            <button onclick="app.changeGroupAvatar(); app.toggleChatMenu();" id="chatMenuChangeAvatarBtn" style="display:none">🖼️ Đổi ảnh nhóm</button>
+            <button onclick="app.chatActionViewMembers()" id="chatMenuMembersBtn" style="display:none">👥 Xem thành viên</button>
+            <button onclick="app.chatActionAddMember()" id="chatMenuAddMemberBtn" style="display:none">➕ Thêm thành viên</button>
+            <button onclick="app.chatActionRemoveMember()" id="chatMenuRemoveMemberBtn" style="display:none">➖ Xóa thành viên</button>
+            <button onclick="app.chatActionClearMessages()">🗑️ Xóa đoạn chat</button>
+            <button onclick="app.chatActionLeaveGroup()" id="chatMenuLeaveBtn" style="display:none; color: var(--accent-red);">🚪 Rời khỏi nhóm</button>
+            <button onclick="app.chatActionBlockUser()" id="chatMenuBlockBtn">🚫 Chặn người dùng</button>
+            <button onclick="app.chatActionReportUser()" style="color: var(--accent-red);">🚩 Báo cáo vi phạm</button>
+          </div>
+        </div>
+        <button class="btn-icon" style="width: 28px; height: 28px;" onclick="app.closeChat()">✕</button>
+      </div>
+    </div>
+
+    <!-- Chat search bar (hidden by default) -->
+    <div id="chatSearchBar" style="display:none; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border-color); background: var(--bg-secondary); position: relative;">
+      <input type="text" id="chatSearchInput" placeholder="Tìm kiếm tin nhắn (không phân biệt hoa/thường, dấu)..." style="width:100%; padding:0.3rem 0.6rem; border-radius:20px; border:1px solid var(--border-color); font-size:0.85rem; background:var(--bg-primary);" oninput="app.searchChatMessages(this.value)" autocomplete="off">
+      <div id="chatSearchResultsDropdown" class="chat-search-dropdown" style="display:none;"></div>
+    </div>
+
+    <!-- Hộp hiển thị tin nhắn -->
+    <div class="chat-body" id="chatBody">
+      <div class="load-more-chat-box" id="loadMoreChatBox">
+        <button class="btn-load-more-chat" id="btnLoadMoreChat" onclick="app.loadOlderMessages()">
+          ⬆️ Tải tin nhắn cũ hơn
+        </button>
+      </div>
+      <div id="messagesList">
+        <!-- Render tin nhắn bởi JS -->
+      </div>
+      <div id="typingIndicator" class="typing-indicator" style="display:none;">
+        <span class="typing-text">Đang soạn tin</span>
+        <div class="typing-dots">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hộp trả lời tin nhắn (Reply preview) -->
+    <div id="chatReplyBar" class="chat-reply-bar" style="display: none;">
+      <div>↪️ Đang trả lời <strong id="chatReplyAuthor">...</strong>: <span id="chatReplySnippet" style="font-style: italic;">...</span></div>
+      <button class="chat-reply-cancel-btn" onclick="app.cancelChatReply()" title="Hủy trả lời">✕</button>
+    </div>
+
+    <div class="chat-footer">
+      <label class="chat-media-btn" title="Gửi ảnh/video" style="cursor:pointer; font-size:1.2rem; padding:0 0.4rem; color:var(--text-muted); display:flex; align-items:center;">
+        📎
+        <input type="file" id="chatMediaInput" accept="image/*,video/*" style="display:none" onchange="app.handleChatMediaUpload(this)">
+      </label>
+      <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
+      <button onclick="app.sendChatMessage()">➤</button>
+    </div>
+  </div>
+
+  <!-- ================= MODAL ĐẶT BIỆT DANH ================= -->
+  <div class="modal-overlay" id="nicknameModal" style="display:none;">
+    <div class="auth-card" style="max-width:380px;">
+      <div class="auth-header"><h2>✏️ Đặt biệt danh</h2></div>
+      <div class="form-group">
+        <label>Biệt danh cho <strong id="nicknameTargetName"></strong>:</label>
+        <input type="text" id="nicknameInput" placeholder="Nhập biệt danh..." maxlength="50">
+      </div>
+      <div style="display:flex;gap:0.5rem;">
+        <button class="btn-secondary" style="flex:1" onclick="document.getElementById('nicknameModal').style.display='none'">Hủy</button>
+        <button class="btn-primary" style="flex:1" onclick="app.submitNickname()">Lưu biệt danh</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL XEM THÀNH VIÊN NHÓM ================= -->
+  <div class="modal-overlay" id="groupMembersModal" style="display:none;">
+    <div class="auth-card" style="max-width:440px;">
+      <div class="auth-header">
+        <h2>👥 Thành viên nhóm</h2>
+        <button class="btn-icon" onclick="document.getElementById('groupMembersModal').style.display='none'">✕</button>
+      </div>
+      <div id="groupMembersList" style="max-height:350px; overflow-y:auto;"></div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL ĐỔI TÊN NHÓM ================= -->
+  <div class="modal-overlay" id="renameGroupModal" style="display:none; z-index: 2050;">
+    <div class="auth-card" style="max-width:400px; width: 92%;">
+      <div class="auth-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="font-size: 1.2rem; font-weight: 700; margin: 0;">✏️ Đổi tên nhóm</h2>
+        <button class="btn-icon" onclick="document.getElementById('renameGroupModal').style.display='none'" style="cursor: pointer;">✕</button>
+      </div>
+      <div class="form-group" style="margin-bottom: 1.2rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Tên nhóm mới:</label>
+        <input type="text" id="renameGroupInput" placeholder="Nhập tên nhóm mới..." maxlength="60" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <button class="btn-secondary" style="flex:1" onclick="document.getElementById('renameGroupModal').style.display='none'">Hủy</button>
+        <button class="btn-primary" style="flex:1" onclick="app.submitRenameGroup()">Lưu tên nhóm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL THÊM THÀNH VIÊN NHÓM ================= -->
+  <div class="modal-overlay" id="addGroupMemberModal" style="display:none;">
+    <div class="auth-card" style="max-width:440px;">
+      <div class="auth-header">
+        <h2>➕ Thêm thành viên</h2>
+        <button class="btn-icon" onclick="document.getElementById('addGroupMemberModal').style.display='none'">✕</button>
+      </div>
+      <div id="addGroupMemberList" style="max-height:350px; overflow-y:auto;"></div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL ĐĂNG NHẬP / ĐĂNG KÝ (KHÔNG NHẬP TRƯỚC TÀI KHOẢN, CÓ XÁC NHẬN MẬT KHẨU) ================= -->
+  <div class="modal-overlay" id="authModal" style="display: none;">
+    <div class="auth-card">
+      <div class="auth-header">
+        <h2>🌐 Mạng Xã Hội MIni</h2>
+        <p>Nền tảng mạng xã hội C++ đa luồng & SQLite</p>
+      </div>
+
+      <!-- TABS: Đăng nhập / Đăng ký -->
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tabLoginBtn" onclick="app.switchAuthTab('login')">Đăng Nhập</button>
+        <button class="auth-tab" id="tabRegisterBtn" onclick="app.switchAuthTab('register')">Đăng Ký</button>
+      </div>
+
+      <!-- FORM ĐĂNG NHẬP: BẮT NGƯỜI DÙNG TỰ NHẬP, KHÔNG ĐIỀN TRƯỚC -->
+      <div id="loginFormContainer">
+        <div class="form-group">
+          <label>Tài khoản hoặc Gmail</label>
+          <input type="text" id="loginIdentifier" placeholder="Nhập tài khoản hoặc email của bạn">
+        </div>
+        <div class="form-group">
+          <label>Mật khẩu</label>
+          <input type="password" id="loginPassword" placeholder="Nhập mật khẩu">
+        </div>
+        <button class="btn-primary btn-full" onclick="app.handleLogin()">Đăng Nhập</button>
+
+        <div class="auth-divider">
+          <span>HOẶC TIẾP TỤC VỚI</span>
+        </div>
+
+        <button class="btn-google" onclick="app.openGoogleAuthModal()">
+          <svg width="18" height="18" viewBox="0 0 18 18">
+            <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/>
+            <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+            <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707 0-.59.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
+            <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
+          </svg>
+          Đăng nhập bằng tài khoản Google
+        </button>
+      </div>
+
+      <!-- FORM ĐĂNG KÝ: CÓ XÁC NHẬN MẬT KHẨU -->
+      <div id="registerStep1Container" style="display: none;">
+        <div class="form-group">
+          <label>Họ và tên</label>
+          <input type="text" id="regFullname" placeholder="Nguyễn Văn A">
+        </div>
+        <div class="form-group">
+          <label>Tên đăng nhập</label>
+          <input type="text" id="regUsername" placeholder="nguyenvana">
+        </div>
+        <div class="form-group">
+          <label>Địa chỉ Gmail</label>
+          <input type="email" id="regEmail" placeholder="your_email@gmail.com">
+        </div>
+        <div class="form-group">
+          <label>Mật khẩu</label>
+          <input type="password" id="regPassword" placeholder="Nhập mật khẩu an toàn">
+        </div>
+        <!-- Thêm xác nhận mật khẩu -->
+        <div class="form-group">
+          <label>Xác nhận mật khẩu</label>
+          <input type="password" id="regConfirmPassword" placeholder="Nhập lại mật khẩu ở trên">
+        </div>
+        <button class="btn-primary btn-full" onclick="app.sendRegisterOtp()">
+          📩 Nhận mã xác thực qua Gmail
+        </button>
+      </div>
+
+      <!-- BƯỚC 2: TỰ NHẬP MÃ 6 CHỮ SỐ (KHÔNG TỰ ĐIỀN) -->
+      <div id="registerStep2Container" style="display: none;">
+        <div style="text-align: center; margin-bottom: 1rem;">
+          <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">📬</div>
+          <h3 style="font-size: 1.15rem; margin-bottom: 0.3rem;">Xác thực mã 6 chữ số</h3>
+          <p style="font-size: 0.85rem; color: var(--text-muted);">
+            Vui lòng nhập mã OTP 6 số vừa gửi tới Gmail: <br><strong id="otpDisplayEmail" style="color: var(--primary);">--</strong>
+          </p>
+        </div>
+
+        <!-- 6 ô số hoàn toàn để trống để người dùng tự nhập -->
+        <div class="otp-container">
+          <input type="text" maxlength="1" class="otp-box" id="otp1" oninput="app.onOtpInput(this, 'otp2')">
+          <input type="text" maxlength="1" class="otp-box" id="otp2" oninput="app.onOtpInput(this, 'otp3')">
+          <input type="text" maxlength="1" class="otp-box" id="otp3" oninput="app.onOtpInput(this, 'otp4')">
+          <input type="text" maxlength="1" class="otp-box" id="otp4" oninput="app.onOtpInput(this, 'otp5')">
+          <input type="text" maxlength="1" class="otp-box" id="otp5" oninput="app.onOtpInput(this, 'otp6')">
+          <input type="text" maxlength="1" class="otp-box" id="otp6" oninput="app.onOtpInput(this, null)">
+        </div>
+
+        <div class="otp-timer">
+          Mã có hiệu lực trong: <span id="otpCountdown">05:00</span>
+        </div>
+
+        <button class="btn-primary btn-full" onclick="app.verifyOtpAndRegister()">
+          ✅ Xác nhận & Hoàn tất đăng ký
+        </button>
+
+        <div style="text-align: center; margin-top: 1rem; font-size: 0.85rem;">
+          Không nhận được mã? <span class="otp-resend" onclick="app.sendRegisterOtp()">Gửi lại mã</span>
+          <br>
+          <span style="font-size: 0.8rem; color: var(--text-muted); cursor: pointer;" onclick="app.backToRegisterStep1()">← Quay lại sửa thông tin</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= GOOGLE CHOOSER ACCOUNTS MODAL (Hình 5) ================= -->
+  <div class="modal-overlay" id="googleAuthModal" style="display: none; background: rgba(0,0,0,0.85); z-index: 9999;">
+    <div style="background: #131314; color: #e3e3e3; border: 1px solid #3c4043; border-radius: 12px; width: 100%; max-width: 820px; box-shadow: 0 16px 48px rgba(0,0,0,0.7); overflow: hidden; font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+      <!-- Google Top Header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid #282a2c;">
+        <div style="display: flex; align-items: center; gap: 0.6rem; font-size: 0.95rem; font-weight: 500;">
+          <svg width="20" height="20" viewBox="0 0 18 18">
+            <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/>
+            <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+            <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707 0-.59.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
+            <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
+          </svg>
+          <span style="color: #e3e3e3;">Đăng nhập bằng Google</span>
+        </div>
+        <button class="btn-icon" style="color: #9aa0a6; font-size: 1.1rem; border: none; background: transparent; cursor: pointer;" onclick="app.closeGoogleAuthModal()">✕</button>
+      </div>
+
+      <!-- Google Content Body: 2 Columns like Image 5 -->
+      <div style="display: grid; grid-template-columns: 1fr 1.3fr; min-height: 360px; padding: 2.2rem 2.5rem; gap: 2.5rem;">
+        <!-- Left Side: Antigravity Logo & Heading -->
+        <div style="display: flex; flex-direction: column; justify-content: flex-start;">
+          <!-- Antigravity colorful swoop icon -->
+          <div style="margin-bottom: 1.5rem;">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <path d="M24 4L6 40H16L24 22L32 40H42L24 4Z" fill="url(#agyGrad)"/>
+              <defs>
+                <linearGradient id="agyGrad" x1="6" y1="4" x2="42" y2="40" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#4285F4"/>
+                  <stop offset="0.5" stop-color="#A142F4"/>
+                  <stop offset="1" stop-color="#F439A0"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h1 style="font-size: 2.2rem; font-weight: 400; line-height: 1.25; margin-bottom: 0.8rem; color: #ffffff;">Chọn tài khoản</h1>
+          <p style="font-size: 1.05rem; color: #9aa0a6;">Tiếp tục tới <strong style="color: #8ab4f8; font-weight: 500;">Google Antigravity</strong></p>
+        </div>
+
+        <!-- Right Side: Account List & Disclaimer -->
+        <div style="display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            <!-- Official Google Sign In button / One Tap -->
+            <div id="googleOfficialBtnBox" style="margin-bottom: 0.8rem; display: flex; flex-direction: column; gap: 0.5rem; align-items: center;">
+              <button class="google-official-login-btn" onclick="app.triggerRealGoogleSignIn()" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.6rem; background: #ffffff; color: #1f1f1f; font-weight: 500; font-size: 0.92rem; padding: 0.6rem 1rem; border-radius: 20px; border: 1px solid #dadce0; cursor: pointer; transition: background 0.15s;">
+                <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707 0-.59.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/></svg>
+                <span>Đăng nhập trực tiếp bằng Google (OAuth2)</span>
+              </button>
+            </div>
+
+            <!-- Divider -->
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin: 0.6rem 0; color: #5f6368; font-size: 0.75rem;">
+              <span style="flex: 1; height: 1px; background: #282a2c;"></span>
+              <span>HOẶC CHỌN TÀI KHOẢN MẪU ĐỂ TEST</span>
+              <span style="flex: 1; height: 1px; background: #282a2c;"></span>
+            </div>
+
+            <!-- Account list -->
+            <div id="googleAccountsList" style="display: flex; flex-direction: column; gap: 0.5rem;">
+              <!-- Render accounts by JS -->
+            </div>
+
+            <!-- Use another account -->
+            <div class="google-account-row" onclick="app.promptCustomGoogleAccount()" style="display: flex; align-items: center; gap: 1rem; padding: 0.9rem 1rem; border-radius: 8px; cursor: pointer; transition: background 0.15s; border-bottom: 1px solid #282a2c;">
+              <div style="width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #9aa0a6; font-size: 1.2rem; border: 1px solid #5f6368;">👤</div>
+              <div style="font-size: 0.95rem; font-weight: 500; color: #e3e3e3;">Sử dụng một tài khoản khác</div>
+            </div>
+          </div>
+
+          <!-- Bottom Privacy & Terms Disclaimer (Hình 5) -->
+          <div style="border-top: 1px solid #282a2c; padding-top: 1.2rem; margin-top: 1.5rem; font-size: 0.82rem; color: #9aa0a6; line-height: 1.5;">
+            Trước khi sử dụng Google Antigravity, bạn có thể xem <a href="#" onclick="return false;" style="color: #8ab4f8; text-decoration: none;">Chính sách quyền riêng tư</a> và <a href="#" onclick="return false;" style="color: #8ab4f8; text-decoration: none;">Điều khoản dịch vụ</a> của ứng dụng này.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL XEM PROFILE CỦA BẠN BÈ ================= -->
+  <div class="modal-overlay" id="userProfileModal" style="display: none;">
+    <div class="auth-card" style="max-width: 520px;">
+      <div style="display: flex; justify-content: flex-end;">
+        <button class="btn-icon" style="width: 30px; height: 30px;" onclick="app.closeUserProfileModal()">✕</button>
+      </div>
+
+      <div style="text-align: center; margin-top: -15px;">
+        <img id="viewProfAvatar" src="/img/default-avatar.svg" alt="Avatar" style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 4px solid var(--primary); background: #d2d6dc;">
+        <h2 id="viewProfFullname" style="margin-top: 0.4rem; font-size: 1.3rem;">Họ và tên</h2>
+        <div id="viewProfUsername" style="color: var(--text-muted); font-size: 0.85rem;">@username</div>
+        <p id="viewProfBio" style="margin: 0.6rem 0; font-style: italic; color: var(--text-muted);">Tiểu sử</p>
+
+        <!-- Nút hành động kết bạn / nhắn tin -->
+        <div id="viewProfActionButtons" style="display: flex; gap: 0.5rem; justify-content: center; margin-top: 0.8rem;">
+          <!-- Nút kết bạn / chấp nhận / nhắn tin render bởi JS -->
+        </div>
+      </div>
+
+      <div class="profile-meta" style="margin-top: 1.2rem; font-size: 0.9rem;">
+        <div>📍 Quê quán: <strong id="viewProfHometown">--</strong></div>
+        <div>🎓 Trường học: <strong id="viewProfSchool">--</strong></div>
+        <div>💼 Nơi làm việc: <strong id="viewProfWorkplace">--</strong></div>
+        <div>🎯 Sở thích: <strong id="viewProfInterests">--</strong></div>
+        <div>👥 Bạn bè: <strong id="viewProfFriendsCount">0 bạn</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL CHỈNH SỬA HỒ SƠ CỦA BẢN THÂN (CÓ CHỌN TỪ VIETNAM DATA) ================= -->
+  <div class="modal-overlay" id="editProfileModal" style="display: none;">
+    <div class="auth-card" style="max-width: 500px;">
+      <div class="auth-header">
+        <h2>✏️ Cập nhật thông tin cá nhân</h2>
+      </div>
+
+      <div class="form-group">
+        <label>Họ và tên</label>
+        <input type="text" id="profFullname">
+      </div>
+      <div class="form-group">
+        <label>Tiểu sử (Bio)</label>
+        <textarea id="profBio" style="resize: none !important; height: 70px; width: 100%; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.5rem; background: var(--bg-surface-secondary); color: var(--text-primary); font-family: inherit; font-size: 0.9rem; box-sizing: border-box;"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label>Giới tính</label>
+        <select id="profGenderSelect">
+          <option value="">-- Chọn giới tính --</option>
+          <option value="Nam">Nam</option>
+          <option value="Nữ">Nữ</option>
+          <option value="Khác">Khác</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Nơi đang ở (Tỉnh / Thành phố)</label>
+        <div class="searchable-select-wrap">
+          <input type="text" id="profResidenceSelect" placeholder="Gõ để tìm tỉnh / thành phố..." autocomplete="off">
+          <div class="searchable-dropdown" id="profResidenceSelect-dropdown"></div>
+        </div>
+      </div>
+
+      <!-- Quê quán chọn từ danh sách 34 tỉnh thành -->
+      <div class="form-group">
+        <label>Quê quán (Tỉnh / Thành phố)</label>
+        <div class="searchable-select-wrap">
+          <input type="text" id="profHometownSelect" placeholder="Gõ để tìm tỉnh / thành phố..." autocomplete="off">
+          <div class="searchable-dropdown" id="profHometownSelect-dropdown"></div>
+        </div>
+      </div>
+
+      <!-- Trường học chọn từ danh sách đại học / cao đẳng -->
+      <div class="form-group">
+        <label>Trường học (Đại học / Cao đẳng / Học viện)</label>
+        <div class="searchable-select-wrap">
+          <input type="text" id="profSchoolInput" placeholder="Gõ để tìm trường..." autocomplete="off">
+          <div class="searchable-dropdown" id="profSchoolInput-dropdown"></div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Nơi làm việc</label>
+        <input type="text" id="profWorkplace" placeholder="Tiki, VNG, FPT, MoMo, Shopee...">
+      </div>
+
+      <!-- Sở thích chọn từ danh sách sở thích có sẵn (Hình 5) -->
+      <div class="form-group">
+        <label>Sở thích</label>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="text" id="profInterestsInput" readonly style="cursor: pointer; background: var(--bg-surface-secondary); flex: 1;" placeholder="Nhấn để chọn sở thích..." onclick="app.openHobbyPickerModal('profInterestsInput')">
+          <button type="button" class="btn-secondary" style="white-space: nowrap; font-size: 0.85rem;" onclick="app.openHobbyPickerModal('profInterestsInput')">🎯 Chọn</button>
+        </div>
+      </div>
+
+      <!-- Mục đổi mật khẩu ở cuối chỉnh sửa hồ sơ -->
+      <div style="margin-top: 1.25rem; padding-top: 0.85rem; border-top: 1px dashed var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.88rem; color: var(--text-muted);">Bảo mật tài khoản:</span>
+        <button type="button" class="btn-secondary" style="font-size: 0.85rem; font-weight: 600; color: var(--primary);" onclick="app.openChangePasswordModal()">
+          🔒 Đổi mật khẩu
+        </button>
+      </div>
+
+      <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+        <button class="btn-secondary" style="flex: 1;" onclick="app.closeEditProfileModal()">Đóng</button>
+        <button class="btn-primary" style="flex: 1;" onclick="app.saveProfile()">Lưu thay đổi</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL ĐỔI MẬT KHẨU ================= -->
+  <div class="modal-overlay" id="changePasswordModal" style="display: none; z-index: 2050;" onclick="if(event.target === this) app.closeChangePasswordModal()">
+    <div class="auth-card" style="max-width: 420px; width: 92%;">
+      <div class="auth-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;">🔒 Đổi mật khẩu</h2>
+        <button type="button" class="btn-close-modal" onclick="app.closeChangePasswordModal()" style="background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--text-muted);" title="Đóng">✖</button>
+      </div>
+
+      <!-- Khung thông báo lỗi trực quan ngay trên modal -->
+      <div id="changePasswordErrorAlert" style="display: none; color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5; padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.85rem; margin-bottom: 0.85rem; font-weight: 500;"></div>
+
+      <div class="form-group" style="margin-bottom: 0.85rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Mật khẩu cũ:</label>
+        <input type="password" id="oldPasswordInput" placeholder="Nhập mật khẩu hiện tại..." autocomplete="current-password" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
+      </div>
+
+      <div class="form-group" style="margin-bottom: 0.85rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Mật khẩu mới:</label>
+        <input type="password" id="newPasswordInput" placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)..." autocomplete="new-password" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
+      </div>
+
+      <div class="form-group" style="margin-bottom: 1.2rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Xác nhận mật khẩu mới:</label>
+        <input type="password" id="confirmNewPasswordInput" placeholder="Nhập lại mật khẩu mới..." autocomplete="new-password" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
+      </div>
+
+      <div style="display: flex; gap: 0.75rem;">
+        <button type="button" class="btn-secondary" style="flex: 1;" onclick="app.closeChangePasswordModal()">Hủy</button>
+        <button type="button" class="btn-primary" style="flex: 1;" onclick="app.submitChangePassword()">Xác nhận</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL DANH SÁCH BIỂU CẢM (Hình 2) ================= -->
+  <div class="modal-overlay" id="postReactionsModal" style="display: none; z-index: 9998;">
+    <div class="auth-card" style="max-width: 480px; width: 100%; padding: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+        <div class="reaction-tabs-bar" id="postReactionsTabs" style="display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 2px;">
+          <!-- Tabs: Tất cả, 👍, ❤️, 😆, 😮, 😢, 😡 -->
+        </div>
+        <button class="btn-icon" onclick="app.closePostReactionsModal()" style="font-size: 1.1rem; width: 32px; height: 32px; flex-shrink: 0;">✕</button>
+      </div>
+      <div id="postReactionsUserList" style="max-height: 380px; overflow-y: auto; margin-top: 0.8rem; display: flex; flex-direction: column; gap: 0.6rem;">
+        <!-- Danh sách người thả cảm xúc render bởi JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL ĐỔI AVATAR (Hình 5) ================= -->
+  <div class="modal-overlay" id="avatarModal" style="display: none;">
+    <div class="auth-card" style="max-width: 400px; text-align: center;">
+      <h3>🖼️ Đổi ảnh đại diện</h3>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+        Tải ảnh từ máy tính hoặc đặt về ảnh đại diện mặc định
+      </p>
+
+      <img id="avatarPreviewImg" src="/img/default-avatar.svg" alt="Preview" style="width: 120px; height: 120px; border-radius: 50%; object-fit: cover; margin-bottom: 1rem; border: 3px solid var(--primary); background: #d2d6dc;">
+
+      <div style="display: flex; flex-direction: column; gap: 0.6rem;">
+        <label class="btn-primary" style="cursor: pointer; justify-content: center;">
+          📁 Chọn ảnh từ máy tính
+          <input type="file" id="avatarFileInput" accept="image/*" style="display: none;" onchange="app.handleAvatarFileChange(this)">
+        </label>
+        <button class="btn-secondary" onclick="app.setDefaultAvatar()">
+          🔄 Dùng avatar mặc định (Hình bóng)
+        </button>
+        <button class="btn-secondary" onclick="app.closeAvatarModal()">
+          Hủy bỏ
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL TẠO NHÓM MỚI ================= -->
+  <div class="modal-overlay" id="createGroupModal" style="display: none;">
+    <div class="auth-card" style="max-width: 440px;">
+      <div class="auth-header">
+        <h2>👥 Tạo nhóm mới</h2>
+        <p>Kết nối và trò chuyện cùng nhiều bạn bè</p>
+      </div>
+      <div class="form-group">
+        <label>Tên nhóm</label>
+        <input type="text" id="newGroupName" placeholder="Ví dụ: Hội bạn thân, Nhóm Đồ án C++">
+      </div>
+      <div class="form-group">
+        <label>Mô tả nhóm</label>
+        <input type="text" id="newGroupDesc" placeholder="Mục đích hoặc nội quy nhóm...">
+      </div>
+      <div class="form-group">
+        <label>Mời bạn bè vào nhóm</label>
+        <div id="groupInviteFriendsList" style="max-height: 180px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.5rem;">
+          <!-- Checkbox bạn bè render bởi JS -->
+        </div>
+      </div>
+      <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+        <button class="btn-secondary" style="flex: 1;" onclick="app.closeCreateGroupModal()">Hủy</button>
+        <button class="btn-primary" style="flex: 1;" onclick="app.submitCreateGroup()">Tạo nhóm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL LỜI MỜI KẾT BẠN ================= -->
+  <div class="modal-overlay" id="friendRequestsModal" style="display: none;">
+    <div class="auth-card" style="max-width: 460px;">
+      <div class="auth-header">
+        <h2>📩 Lời mời kết bạn</h2>
+        <p>Những người muốn kết nối với bạn</p>
+      </div>
+      <div id="friendRequestsList" style="display: flex; flex-direction: column; gap: 0.8rem; max-height: 320px; overflow-y: auto;">
+        <!-- Render danh sách lời mời -->
+      </div>
+      <button class="btn-secondary btn-full" style="margin-top: 1rem;" onclick="app.closeFriendRequestsModal()">Đóng</button>
+    </div>
+  </div>
+
+  <!-- ================= MODAL XEM BÌNH LUẬN (Hình 2 & 5) ================= -->
+  <div class="modal-overlay" id="commentModal" style="display: none;">
+    <div class="comment-modal-dialog">
+      <div class="comment-modal-header">
+        <span id="commentModalTitle">Bài viết của...</span>
+        <button class="btn-icon" onclick="app.closeCommentModal()">✕</button>
+      </div>
+      <div class="comment-modal-body" id="commentModalBody">
+        <div class="comment-modal-post-author">
+          <img id="cmtPostAuthorAvatar" src="/img/default-avatar.svg" alt="Avatar">
+          <div>
+            <div style="font-weight: 700; font-size: 0.95rem;" id="cmtPostAuthorName">--</div>
+            <div style="font-size: 0.78rem; color: var(--text-muted);" id="cmtPostTime">--</div>
+          </div>
+        </div>
+        <div class="comment-modal-post-content" id="cmtPostContent"></div>
+        <div class="comment-modal-post-media" id="cmtPostMedia"></div>
+        <div class="comment-modal-stats">
+          <div id="cmtModalReactionsCluster"></div>
+          <div><span id="cmtModalCommentsCount">0</span> bình luận</div>
+        </div>
+        <div class="comment-modal-actions" id="cmtModalActionsBar"></div>
+        
+        <!-- Danh sách bình luận và phản hồi lồng nhau (Hình 5) -->
+        <div class="comment-list-container" id="cmtModalListContainer"></div>
+      </div>
+      <div class="comment-modal-footer">
+        <div class="replying-indicator" id="replyingIndicator" style="display: none;">
+          <span>Đang trả lời: <strong id="replyingTargetName">@nguoidung</strong></span>
+          <button onclick="app.cancelReplyComment()">✕</button>
+        </div>
+        <div class="comment-input-row">
+          <img id="cmtMyAvatar" src="/img/default-avatar.svg" alt="My avatar">
+          <input type="text" id="modalCommentInput" placeholder="Viết bình luận công khai..." onkeypress="if(event.key === 'Enter') app.submitCommentFromModal()">
+          <button onclick="app.submitCommentFromModal()">➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL CHỈNH SỬA BÀI VIẾT ================= -->
+  <div class="modal-overlay" id="editPostModal" style="display: none;">
+    <div class="auth-card" style="max-width: 520px; width: 92%;">
+      <div class="auth-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 700;">✏️ Chỉnh sửa bài viết</h2>
+        <button type="button" class="btn-close-modal" onclick="app.closeEditPostModal()" style="background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--text-muted);" title="Đóng">✖</button>
+      </div>
+      <input type="hidden" id="editPostIdInput">
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Tiêu đề (tùy chọn):</label>
+        <input type="text" id="editPostTitleInput" placeholder="Nhập tiêu đề bài viết..." style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Nội dung bài viết:</label>
+        <textarea id="editPostContentInput" rows="4" placeholder="Bạn đang nghĩ gì?..." style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem; resize: vertical;"></textarea>
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Quyền riêng tư:</label>
+        <select id="editPostVisibilitySelect" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
+          <option value="PUBLIC">🌍 Công khai</option>
+          <option value="FRIENDS">👥 Bạn bè</option>
+          <option value="PRIVATE">🔒 Chỉ mình tôi</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom: 1rem;">
+        <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Ảnh / Video đính kèm:</label>
+        <div id="editPostMediaPreviewContainer" style="display: none; position: relative; margin-bottom: 0.5rem; max-height: 220px; overflow: hidden; border-radius: 8px; border: 1px solid var(--border-color); text-align: center; background: #000;">
+          <img id="editPostImagePreview" src="" alt="Ảnh xem trước" style="max-height: 200px; max-width: 100%; object-fit: contain; display: none; margin: 0 auto;">
+          <video id="editPostVideoPreview" src="" controls style="max-height: 200px; max-width: 100%; display: none; margin: 0 auto;"></video>
+          <button type="button" class="btn-remove-media" onclick="app.removeEditPostMedia()" style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.65); color: #fff; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.9rem;" title="Gỡ file đính kèm">✖</button>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <label class="btn-secondary" style="flex: 1; text-align: center; cursor: pointer; padding: 0.5rem; font-size: 0.85rem; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+            🖼️ Đổi ảnh
+            <input type="file" id="editPostImageInput" accept="image/*" style="display: none;" onchange="app.handleEditPostImageAttachment(this)">
+          </label>
+          <label class="btn-secondary" style="flex: 1; text-align: center; cursor: pointer; padding: 0.5rem; font-size: 0.85rem; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+            🎥 Đổi video
+            <input type="file" id="editPostVideoInput" accept="video/*" style="display: none;" onchange="app.handleEditPostVideoAttachment(this)">
+          </label>
+        </div>
+      </div>
+      <div style="display: flex; gap: 0.75rem;">
+        <button type="button" class="btn-secondary" style="flex: 1;" onclick="app.closeEditPostModal()">Hủy</button>
+        <button type="button" class="btn-primary" style="flex: 1;" onclick="app.submitEditPost()">Lưu thay đổi</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL CHIA SẺ VÀO HỘP CHAT BẠN BÈ / NHÓM ================= -->
+  <div class="modal-overlay" id="shareToChatModal" style="display: none;">
+    <div class="auth-card" style="max-width: 440px;">
+      <div class="auth-header">
+        <h2>📨 Chia sẻ bài viết</h2>
+        <p>Gửi bài viết này vào hộp thoại tin nhắn của bạn bè hoặc nhóm</p>
+      </div>
+      <div class="form-group">
+        <label>Chọn người nhận hoặc nhóm:</label>
+        <select id="shareChatTargetSelect">
+          <!-- Render danh sách bạn bè và nhóm -->
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Lời nhắn kèm theo (tùy chọn):</label>
+        <textarea id="shareChatMessageInput" placeholder="Bạn thấy bài viết này thế nào?..."></textarea>
+      </div>
+      <div style="display: flex; gap: 0.5rem;">
+        <button class="btn-secondary" style="flex: 1;" onclick="app.closeShareToChatModal()">Hủy</button>
+        <button class="btn-primary" style="flex: 1;" onclick="app.submitSharePostToChat()">Gửi ngay</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL ĐĂNG LẠI BÀI VIẾT (REPOST) ================= -->
+  <div class="modal-overlay" id="repostModal" style="display: none;">
+    <div class="auth-card" style="max-width: 480px;">
+      <div class="auth-header">
+        <h2>🔁 Đăng lại bài viết</h2>
+        <p>Bài viết sẽ xuất hiện trên trang cá nhân của bạn, giữ nguyên nội dung và tác giả gốc</p>
+      </div>
+      <div id="repostPreviewBox" style="background: var(--bg-secondary); border-radius: 10px; padding: 0.75rem; margin-bottom: 0.8rem; border: 1px solid var(--border-color); max-height: 180px; overflow-y: auto; font-size: 0.88rem;"></div>
+      <div class="form-group">
+        <label>Cảm nghĩ của bạn (tùy chọn):</label>
+        <textarea id="repostThoughtsInput" placeholder="Bạn nghĩ gì về bài viết này?..." rows="3" style="resize: vertical;"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Quyền riêng tư bài đăng lại:</label>
+        <select id="repostVisibilitySelect">
+          <option value="PUBLIC">🌍 Công khai</option>
+          <option value="FRIENDS">👥 Bạn bè</option>
+          <option value="PRIVATE">🔒 Chỉ mình tôi</option>
+        </select>
+      </div>
+      <div style="display: flex; gap: 0.5rem;">
+        <button class="btn-secondary" style="flex: 1;" onclick="app.closeRepostModal()">Hủy</button>
+        <button class="btn-primary" style="flex: 1;" onclick="app.submitRepost()">🔁 Đăng lại</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL HỖ TRỢ (BÁO CÁO SỰ CỐ VỚI ADMIN) ================= -->
+  <div class="modal-overlay" id="supportModal" style="display: none;">
+    <div class="auth-card" style="max-width: 480px;">
+      <div class="auth-header">
+        <h2>🛠️ Báo Cáo Sự Cố & Hỗ Trợ</h2>
+        <p>Gửi phản ánh hoặc yêu cầu trợ giúp trực tiếp tới Quản trị viên</p>
+      </div>
+      <div class="form-group">
+        <label>Loại sự cố / yêu cầu:</label>
+        <select id="supportCategorySelect">
+          <option value="Lỗi tính năng hệ thống">Lỗi tính năng hệ thống</option>
+          <option value="Sự cố tài khoản / Đăng nhập">Sự cố tài khoản / Đăng nhập</option>
+          <option value="Báo cáo lỗi giao diện / Hiển thị">Báo cáo lỗi giao diện / Hiển thị</option>
+          <option value="Đóng góp ý kiến nâng cấp">Đóng góp ý kiến nâng cấp</option>
+          <option value="Yêu cầu hỗ trợ khác">Yêu cầu hỗ trợ khác...</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Mô tả chi tiết vấn đề bạn gặp phải:</label>
+        <textarea id="supportDetailInput" rows="4" placeholder="Vui lòng mô tả cụ thể sự cố để Quản trị viên xử lý sớm nhất..."></textarea>
+      </div>
+      <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+        <button class="btn-secondary" style="flex: 1;" onclick="app.closeSupportModal()">Hủy</button>
+        <button class="btn-primary" style="flex: 1;" onclick="app.submitSupportReport()">Gửi báo cáo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL BÁO CÁO VI PHẠM ================= -->
+  <div class="modal-overlay" id="reportModal" style="display: none;">
+    <div class="auth-card" style="max-width: 420px;">
+      <div class="auth-header">
+        <h2 id="reportModalHeading">🚩 Báo cáo vi phạm</h2>
+        <p>Báo cáo sẽ được chuyển thẳng tới Quản trị viên hệ thống</p>
+      </div>
+      <div class="form-group">
+        <label>Lý do báo cáo:</label>
+        <select id="reportReasonSelect">
+          <option value="Spam / Tin rác">Spam / Tin rác</option>
+          <option value="Nội dung thô lỗ, xúc phạm">Nội dung thô lỗ, xúc phạm</option>
+          <option value="Tài khoản giả mạo người khác">Tài khoản giả mạo người khác</option>
+          <option value="Hành vi lừa đảo">Hành vi lừa đảo</option>
+          <option value="Khác">Lý do khác...</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Chi tiết thêm:</label>
+        <textarea id="reportDetailInput" style="width: 100%; border-radius: 8px; padding: 0.5rem; background: var(--bg-surface-secondary); color: var(--text-main); border: 1px solid var(--border-color);" placeholder="Mô tả cụ thể sự việc..."></textarea>
+      </div>
+      <div style="display: flex; gap: 0.5rem;">
+        <button class="btn-secondary" style="flex: 1;" onclick="app.closeReportModal()">Hủy</button>
+        <button class="btn-primary" style="flex: 1; background-color: var(--accent-red);" onclick="app.submitReport()">Gửi báo cáo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL CHỌN SỞ THÍCH (HÌNH 5) ================= -->
+  <div class="modal-overlay" id="hobbyPickerModal" style="display: none;">
+    <div class="hobby-modal-dialog">
+      <div class="hobby-modal-header">
+        <h3>🎯 Chọn sở thích</h3>
+        <button class="btn-icon" onclick="app.closeHobbyPickerModal()">✕</button>
+      </div>
+      <div class="hobby-modal-search">
+        <input type="text" id="hobbySearchInput" class="hobby-search-input" placeholder="Tìm kiếm sở thích..." oninput="app.filterHobbyList(this.value)">
+      </div>
+      <div class="hobby-selected-tags-box" id="hobbySelectedTagsBox">
+        <!-- Render các thẻ sở thích đã chọn -->
+      </div>
+      <div class="hobby-list-container" id="hobbyListContainer">
+        <!-- Render danh sách sở thích kèm dấu ✓ hoặc ✕ -->
+      </div>
+      <div class="hobby-modal-footer">
+        <button class="btn-secondary" onclick="app.closeHobbyPickerModal()">Hủy</button>
+        <button class="btn-primary" onclick="app.confirmHobbySelection()">Xác nhận</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL THÔNG BÁO TRUNG TÂM MÀN HÌNH (Quá 5 phút thu hồi) ================= -->
+  <div class="center-screen-modal" id="centerScreenModal" style="display: none;" onclick="if(event.target === this) app.closeCenterAlertModal()">
+    <div class="center-screen-card">
+      <div class="alert-icon" id="centerAlertIcon">⚠️</div>
+      <h3 id="centerAlertTitle">Không thể thu hồi tin nhắn</h3>
+      <p id="centerAlertMessage">Tin nhắn đã gửi quá 5 phút nên không thể thu hồi cho mọi người.</p>
+      <button class="btn-primary" onclick="app.closeCenterAlertModal()">Đã hiểu</button>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- ================= LIGHTBOX XEM ẢNH LỚN (avatar nhóm / ảnh bài viết) ================= -->
+  <div class="image-lightbox-overlay" id="imageLightbox" onclick="if(event.target===this) app.closeImageLightbox()">
+    <img id="imageLightboxImg" class="image-lightbox-img" src="" alt="Xem ảnh" onclick="event.stopPropagation()">
+    <div class="image-lightbox-toolbar" onclick="event.stopPropagation()">
+      <button type="button" onclick="app.zoomImageLightbox(0.2)" title="Phóng to">🔍+</button>
+      <button type="button" onclick="app.zoomImageLightbox(-0.2)" title="Thu nhỏ">🔍−</button>
+      <button type="button" onclick="app.resetImageLightboxZoom()" title="Về kích thước gốc">1:1</button>
+      <button type="button" onclick="app.closeImageLightbox()" title="Đóng">✕ Đóng</button>
+    </div>
+  </div>
+
+  <!-- SCRIPTS -->
+  <script src="js/vietnamData.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

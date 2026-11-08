@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  social-network-cpp:
+    build: .
+    container_name: connect-sphere-cpp
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data

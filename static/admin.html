@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - Mạng Xã Hội MIni</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="img/default-avatar.svg" type="image/svg+xml">
+</head>
+<body>
+  <!-- ================= HEADER / NAVBAR ADMIN ================= -->
+  <header class="navbar">
+    <div class="nav-left">
+      <a href="index.html" class="logo-container">
+        <div class="logo-icon" style="background: linear-gradient(135deg, #f02849, #ff7a45);">🛡️</div>
+        <span>Quản Trị Viên (Admin)</span>
+      </a>
+      <span style="background: var(--accent-red); color: white; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">ADMIN DASHBOARD</span>
+    </div>
+
+    <div class="nav-right">
+      <a href="index.html" class="btn-secondary" style="font-size: 0.85rem; padding: 0.4rem 0.8rem; text-decoration: none;">
+        🏠 Về Mạng Xã Hội
+      </a>
+
+      <!-- Chuyển đổi Dark Mode -->
+      <button class="btn-icon theme-toggle" id="themeToggleBtn" title="Chuyển chế độ Sáng / Tối">🌙</button>
+
+      <!-- Badge tài khoản Admin -->
+      <div class="user-nav-badge" id="navUserBadge" onclick="app.openMyProfile()">
+        <img id="navAvatar" src="/img/default-avatar.svg" alt="Avatar">
+        <span id="navFullname">Quản Trị Viên</span>
+      </div>
+
+      <!-- Đăng xuất -->
+      <button class="btn-icon" id="logoutBtn" title="Đăng xuất" style="color: var(--accent-red);">🚪</button>
+    </div>
+  </header>
+
+  <!-- ================= LAYOUT ADMIN ================= -->
+  <main class="admin-page-container">
+    <!-- TỔNG QUAN THỐNG KÊ (CARDS) -->
+    <section class="admin-stats-grid">
+      <div class="admin-stat-card">
+        <div class="admin-stat-number" style="color: var(--primary);" id="admStatUsers">0</div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">👥 Tổng Người Dùng</div>
+      </div>
+      <div class="admin-stat-card">
+        <div class="admin-stat-number" style="color: var(--accent-red);" id="admStatLocked">0</div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">🔒 Tài Khoản Đã Khóa</div>
+      </div>
+      <div class="admin-stat-card">
+        <div class="admin-stat-number" style="color: var(--accent-green);" id="admStatPosts">0</div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">📝 Tổng Bài Viết</div>
+      </div>
+      <div class="admin-stat-card">
+        <div class="admin-stat-number" style="color: #00c6ff;" id="admStatMessages">0</div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">💬 Tổng Tin Nhắn</div>
+      </div>
+      <div class="admin-stat-card">
+        <div class="admin-stat-number" style="color: #f7b125;" id="admStatPendingReports">0</div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">🚩 Báo Cáo Chờ Xử Lý</div>
+      </div>
+      <div class="admin-stat-card">
+        <div class="admin-stat-number" style="color: #8b5cf6;" id="admStatGroups">0</div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">👥 Tổng Nhóm Chat</div>
+      </div>
+    </section>
+
+    <!-- TABS QUẢN LÝ -->
+    <section>
+      <div class="auth-tabs" style="margin-bottom: 1.25rem;">
+        <button class="auth-tab active" id="tabAdmReportsBtn" onclick="app.switchAdminPageTab('reports')">🚩 Xử lý Báo cáo vi phạm</button>
+        <button class="auth-tab" id="tabAdmUsersBtn" onclick="app.switchAdminPageTab('users')">👥 Quản lý Người dùng & Khóa tài khoản</button>
+        <button class="auth-tab" id="tabAdmPostsBtn" onclick="app.switchAdminPageTab('posts')">📝 Quản lý Bài viết</button>
+      </div>
+
+      <!-- TAB 1: BÁO CÁO VI PHẠM & SỰ CỐ -->
+      <div id="admSectionReports" class="admin-table-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+          <h3>Danh Sách Báo Cáo Vi Phạm & Sự Cố</h3>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <input type="text" id="admSearchReportInput" placeholder="Tìm theo lý do, người báo cáo..." oninput="app.filterAdminReportsTable(this.value)"
+                   style="background: var(--bg-surface-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.4rem 0.8rem; width: 280px; color: var(--text-main);">
+            <button class="btn-secondary" onclick="app.loadAdminReportsTable()" style="font-size: 0.8rem;">🔄 Làm mới</button>
+          </div>
+        </div>
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Người báo cáo</th>
+              <th>Đối tượng bị báo cáo</th>
+              <th>Lý do & Chi tiết</th>
+              <th>Thời gian</th>
+              <th>Trạng thái</th>
+              <th>Hành động</th>
+            </tr>
+          </thead>
+          <tbody id="adminReportsTableBody">
+            <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Đang tải báo cáo...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- TAB 2: QUẢN LÝ NGƯỜI DÙNG & KHÓA TÀI KHOẢN -->
+      <div id="admSectionUsers" class="admin-table-card" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h3>Danh Sách Toàn Bộ Người Dùng</h3>
+          <input type="text" id="admSearchUserInput" placeholder="Tìm theo tên, username, email..." oninput="app.filterAdminUsersTable(this.value)"
+                 style="background: var(--bg-surface-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.4rem 0.8rem; width: 280px; color: var(--text-main);">
+        </div>
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Người dùng</th>
+              <th>Tên đăng nhập / Email</th>
+              <th>Trường / Quê quán</th>
+              <th>Vai trò</th>
+              <th>Trạng thái</th>
+              <th>Hoạt động gần nhất</th>
+              <th>Khóa / Mở khóa</th>
+            </tr>
+          </thead>
+          <tbody id="adminUsersTableBody">
+            <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Đang tải người dùng...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- TAB 3: QUẢN LÝ BÀI VIẾT -->
+      <div id="admSectionPosts" class="admin-table-card" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+          <h3>Danh Sách Bài Viết Hệ Thống</h3>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <input type="text" id="admSearchPostInput" placeholder="Tìm theo tác giả, nội dung, ID..." oninput="app.filterAdminPostsTable(this.value)"
+                   style="background: var(--bg-surface-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.4rem 0.8rem; width: 280px; color: var(--text-main);">
+            <button class="btn-secondary" onclick="app.loadAdminPostsTable()" style="font-size: 0.8rem;">🔄 Làm mới</button>
+          </div>
+        </div>
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>ID Bài viết</th>
+              <th>Tác giả</th>
+              <th>Nội dung bài viết</th>
+              <th>Đính kèm</th>
+              <th>Thời gian</th>
+              <th>Hành động</th>
+            </tr>
+          </thead>
+          <tbody id="adminPostsTableBody">
+            <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Đang tải bài viết...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- SCRIPTS -->
+  <script src="js/vietnamData.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      if (app && app.initAdminPage) {
+        app.initAdminPage();
+      }
+    });
+  </script>
+</body>
+</html>
