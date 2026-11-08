@@ -45,39 +45,80 @@ public:
     }
 
     void loadEnv(const std::string& path = ".env") {
+    
+        env_.clear();
+    
+        // 1. Đọc file .env nếu tồn tại
         std::ifstream f(path);
-        if (!f.is_open()) {
-            // Thử thư mục cha / cwd
-            f.open("./.env");
-        }
-        if (!f.is_open()) {
-            std::cout << "[Gemini] Không tìm thấy file .env — AI moderation sẽ dùng fallback từ khóa.\n";
-            std::cout << "[Gemini] Sao chép .env.example thành .env và điền GEMINI_API_KEY.\n";
-            return;
-        }
         std::string line;
-        while (std::getline(f, line)) {
-            // Bỏ comment và dòng trống
-            if (line.empty() || line[0] == '#') continue;
+    
+        while (f && std::getline(f, line)) {
+    
+            line = trim(line);
+    
+            if (line.empty() || line[0] == '#')
+                continue;
+    
             auto pos = line.find('=');
-            if (pos == std::string::npos) continue;
+    
+            if (pos == std::string::npos)
+                continue;
+    
             std::string key = trim(line.substr(0, pos));
             std::string val = trim(line.substr(pos + 1));
-            // Bỏ dấu ngoặc kép nếu có
-            if (val.size() >= 2 && ((val.front() == '"' && val.back() == '"') || (val.front() == '\'' && val.back() == '\''))) {
+    
+            if (val.size() >= 2 &&
+                ((val.front() == '"' && val.back() == '"') ||
+                 (val.front() == '\'' && val.back() == '\''))) {
+    
                 val = val.substr(1, val.size() - 2);
             }
+    
             env_[key] = val;
         }
+    
+        // 2. Ưu tiên biến môi trường của hosting
+        const char* key = std::getenv("GEMINI_API_KEY");
+        const char* model = std::getenv("GEMINI_MODEL");
+        const char* enabled = std::getenv("GEMINI_MODERATION_ENABLED");
+        const char* block = std::getenv("GEMINI_BLOCK_SEVERE");
+    
+        if (key) env_["GEMINI_API_KEY"] = key;
+        if (model) env_["GEMINI_MODEL"] = model;
+        if (enabled) env_["GEMINI_MODERATION_ENABLED"] = enabled;
+        if (block) env_["GEMINI_BLOCK_SEVERE"] = block;
+    
+        // 3. Nạp cấu hình
         apiKey_ = envGet("GEMINI_API_KEY", "");
-        model_ = envGet("GEMINI_MODEL", "gemini-2.0-flash");
-        enabled_ = toBool(envGet("GEMINI_MODERATION_ENABLED", "true"));
-        blockSevere_ = toBool(envGet("GEMINI_BLOCK_SEVERE", "true"));
-
+    
+        model_ = envGet(
+            "GEMINI_MODEL",
+            "gemini-3.8-flash"
+        );
+    
+        enabled_ = toBool(
+            envGet("GEMINI_MODERATION_ENABLED", "true")
+        );
+    
+        blockSevere_ = toBool(
+            envGet("GEMINI_BLOCK_SEVERE", "true")
+        );
+    
+        // 4. Thông báo trạng thái
         if (apiKey_.empty()) {
-            std::cout << "[Gemini] GEMINI_API_KEY trống — dùng phân loại từ khóa local.\n";
+    
+            std::cout
+                << "[Gemini] Không có API KEY!"
+                << " Đang sử dụng fallback.\n";
+    
         } else {
-            std::cout << "[Gemini] Đã nạp API Key (ẩn). Model: " << model_ << " | moderation=" << (enabled_ ? "ON" : "OFF") << "\n";
+    
+            std::cout
+                << "[Gemini] API đã kết nối cấu hình."
+                << " Model: " << model_
+                << " | Moderation: "
+                << (enabled_ ? "ON" : "OFF")
+                << std::endl;
         }
     }
 
