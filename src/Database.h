@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <cmath>
 #include <cctype>
+#include <cstdlib>
 #include <sqlite3.h>
 #include "Models.h"
 
@@ -54,7 +55,13 @@ public:
         sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);
 
         createTables();
-        seedDataIfEmpty();
+
+        const char* seed = std::getenv("SEED_DEMO_DATA");
+        
+        if (seed && std::string(seed) == "true") {
+            seedDataIfEmpty();
+        }
+        
         return true;
     }
 
