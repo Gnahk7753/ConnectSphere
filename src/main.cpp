@@ -2,6 +2,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <cstdlib>
+#include <filesystem>
 #include "httplib.h"
 #include "json.hpp"
 #include "Models.h"
@@ -38,8 +40,21 @@ int main() {
     GeminiService::instance().loadEnv(".env");
 
     Database db;
-    if (!db.init("data/social_network.db")) {
-        std::cerr << "Lỗi: Không thể khởi tạo SQLite Database!" << std::endl;
+    std::string dbPath = "data/social_network.db";
+
+    if (const char* path = std::getenv("DATABASE_PATH")) {
+        dbPath = path;
+    }
+    
+    std::filesystem::path parent =
+        std::filesystem::path(dbPath).parent_path();
+    
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent);
+    }
+    
+    if (!db.init(dbPath)) {
+        std::cerr << "Loi khoi tao Database!" << std::endl;
         return 1;
     }
     std::cout << "[Database] SQLite Database đã sẵn sàng tại data/social_network.db" << std::endl;
@@ -85,7 +100,15 @@ int main() {
             json resp = {
                 {"status", "ok"},
                 {"message", "Mã xác thực 6 chữ số đã được tạo và gửi tới Gmail: " + email},
-                {"code_for_user", otpCode} // Trả về thông báo để người dùng tự nhập tay mã 6 số
+                json resp = {
+                    {"status", "ok"},
+                    {"message", "Ma OTP da duoc gui den email."}
+                };
+                
+                res.set_content(
+                    resp.dump(),
+                    "application/json; charset=utf-8"
+                );
             };
             res.set_content(resp.dump(), "application/json; charset=utf-8");
         } catch (const std::exception& e) {
@@ -1643,10 +1666,25 @@ int main() {
     });
 
     int port = 8080;
-    std::cout << "[Server] C++ Web Server đang khởi động tại: http://localhost:" << port << std::endl;
-    while (!svr.listen("0.0.0.0", port)) {
-        std::cout << "[Server] Cổng " << port << " đang bận hoặc đang giải phóng (TimeWait). Đang thử lại sau 2 giây..." << std::endl;
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    if (const char* envPort = std::getenv("PORT")) {
+        try {
+            port = std::stoi(envPort);
+        }
+        catch (...) {
+            std::cerr << "PORT không hợp lệ!" << std::endl;
+            return 1;
+        }
     }
+    
+    std::cout
+        << "[Server] Running on port: "
+        << port << std::endl;
+    
+    if (!svr.listen("0.0.0.0", port)) {
+        std::cerr << "Không thể khởi động server!" << std::endl;
+        return 1;
+    }
+    
     return 0;
 }
