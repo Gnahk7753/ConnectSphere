@@ -269,7 +269,7 @@
         <h2 id="reportModalHeading" style="font-size: 1.25rem;">🚩 Báo cáo vi phạm</h2>
         <button type="button" class="btn-close-modal" onclick="app.closeReportModal()" style="background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--text-muted);" title="Đóng">✖</button>
       </div>
-      <p id="reportModalSubHeading" style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">Báo cáo sẽ được chuyển thẳng tới Quản trị viên hệ thống xử lý</p>
+      <p id="reportModalSubHeading" style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">AI sẽ kiểm tra nội dung được báo cáo; trường hợp chưa rõ sẽ chuyển Quản trị viên xem xét.</p>
       <div class="form-group" style="margin-bottom: 0.75rem;">
         <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Lý do báo cáo:</label>
         <select id="reportReasonSelect" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
@@ -313,7 +313,7 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261114-theme-fix2"></script>
+  <script src="js/app.js?v=20261115-auth-moderation"></script>
   <script>
     window.addEventListener("DOMContentLoaded", () => {
       const urlParams = new URLSearchParams(window.location.search);

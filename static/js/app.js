@@ -53,8 +53,7 @@ class AppClient {
     this.oldestMessageId = 0;
     this.hasMoreMessages = false;
     this.isLoadingOlderMessages = false;
-    this.otpTimerInterval = null;
-    this.tempRegisterData = null;
+    this.pendingGoogleCredential = null;
     this.currentMedia = { type: 'NONE', url: '' };
     this.pendingCommentMedia = null;
     this.shareTargetPostId = null;
@@ -3060,7 +3059,7 @@ class AppClient {
       <div class="notif-item ${notification.is_read ? '' : 'unread'}" id="notif-item-${id}" onclick="app.handleNotificationClick(${app.jsArg(link)}, ${id})">
         <img src="${this.escapeHtml(notification.actor_avatar || '/img/default-avatar.svg')}" alt="Avatar">
         <div class="notif-text">
-          <strong>${this.escapeHtml(notification.actor_name || 'Người dùng')}</strong> ${this.escapeHtml(notification.content || '')}
+          <strong>${this.escapeHtml(notification.actor_name || 'Hệ thống')}</strong> ${this.escapeHtml(notification.content || '')}
           <div class="notif-time">${this.formatTimeAgo(notification.created_at)}</div>
         </div>
         ${!notification.is_read ? '<span class="unread-blue-dot notif-dot" title="Thông báo chưa đọc"></span>' : ''}
@@ -7434,7 +7433,7 @@ class AppClient {
   openUserGuide() {
     this._openInfoModal('📖 Hướng dẫn sử dụng website', `
       <ol style="line-height:1.75;padding-left:1.15rem;margin:0;color:var(--text-main);font-size:.92rem;">
-        <li>Đăng nhập hoặc đăng ký tài khoản.</li>
+        <li>Đăng nhập bằng Google hoặc email/tên đăng nhập và mật khẩu.</li>
         <li>Cập nhật hồ sơ (avatar, quê quán, trường học, sở thích).</li>
         <li>Kết bạn từ mục <strong>Bạn bè</strong> hoặc gợi ý trên bảng tin.</li>
         <li>Đăng bài viết trên <strong>Bảng tin chính</strong> (có thể kèm ảnh/video).</li>
@@ -7532,7 +7531,7 @@ class AppClient {
           <h2 id="reportModalHeading" style="font-size: 1.25rem;">🚩 Báo cáo vi phạm</h2>
           <button type="button" class="btn-close-modal" onclick="app.closeReportModal()" style="background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--text-muted);" title="Đóng">✖</button>
         </div>
-        <p id="reportModalSubHeading" style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">Báo cáo sẽ được chuyển thẳng tới Quản trị viên hệ thống xử lý</p>
+        <p id="reportModalSubHeading" style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">AI sẽ kiểm tra nội dung được báo cáo; trường hợp chưa rõ sẽ chuyển Quản trị viên xem xét.</p>
         <div class="form-group" style="margin-bottom: 0.75rem;">
           <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Lý do báo cáo:</label>
           <select id="reportReasonSelect" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem;">
@@ -7602,7 +7601,7 @@ class AppClient {
       });
       const data = await res.json();
       if (data.status === 'ok') {
-        this.showToast('Báo cáo của bạn đã được gửi tới Quản trị viên xử lý!', 'success');
+        this.showToast(data.message || 'Báo cáo của bạn đã được gửi tới Quản trị viên xử lý!', 'success');
         this.closeReportModal();
       } else {
         this.showToast(data.message || 'Lỗi gửi báo cáo!', 'error');
@@ -7886,6 +7885,9 @@ class AppClient {
 
       const done = (r.status === 'RESOLVED' || r.status === 'DISMISSED');
       const statusBadge = `<span class="status-badge ${String(r.status).toLowerCase()}">${statusLabel[r.status] || this.escapeHtml(r.status)}</span>`;
+      const aiInfo = r.ai_action && r.ai_action !== 'PENDING'
+        ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:4px;">AI: ${this.escapeHtml(r.ai_action)}${r.ai_reason ? ` — ${this.escapeHtml(r.ai_reason)}` : ''}</div>`
+        : '';
       const catSelect = `<select onchange="app.adminClassifyReport(${r.id}, this.value)" style="font-size:0.75rem;margin-top:6px;background:var(--bg-surface-secondary);color:var(--text-main);border:1px solid var(--border-color);border-radius:6px;padding:2px 4px;">
           <option value="">-- Phân loại --</option>
           ${categories.map(c => `<option value="${c[0]}" ${r.category === c[0] ? 'selected' : ''}>${c[1]}</option>`).join('')}
@@ -7899,7 +7901,7 @@ class AppClient {
           <td>${targetText}</td>
           <td>${this.escapeHtml(r.reason)}${catSelect}</td>
           <td>${this.formatTimeAgo(r.created_at)}</td>
-          <td>${statusBadge}${resolvedInfo}</td>
+          <td>${statusBadge}${aiInfo}${resolvedInfo}</td>
           <td>
             <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
               ${r.reported_user_id ? `<button class="btn-secondary" style="font-size: 0.75rem; color: var(--accent-red);" onclick="app.adminToggleLock(${app.jsArg(r.reported_user_id)})">Khóa user</button>` : ''}
@@ -7935,6 +7937,9 @@ class AppClient {
     tbody.innerHTML = users.map(u => {
       const isLocked = (u.status === 'LOCKED');
       const statusBadge = isLocked ? '<span class="status-badge locked">ĐÃ KHÓA</span>' : '<span class="status-badge active">HOẠT ĐỘNG</span>';
+      const moderationBadge = u.moderation_flagged
+        ? '<span class="status-badge locked" title="Có vi phạm được AI xác nhận">ĐÃ GẮN CỜ</span>'
+        : '';
       const actionBtn = isLocked ?
         `<button class="btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" onclick="app.adminToggleLock(${app.jsArg(u.id)})">🔓 Mở khóa</button>` :
         `<button class="btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem; color: var(--accent-red);" onclick="app.adminToggleLock(${app.jsArg(u.id)})">🔒 Khóa tài khoản</button>`;
@@ -7943,7 +7948,7 @@ class AppClient {
         <tr>
           <td style="display: flex; align-items: center; gap: 0.5rem;">
             <img src="${app.escapeHtml(u.avatar || '/img/default-avatar.svg')}" style="width: 28px; height: 28px; border-radius: 50%;">
-            <strong>${this.escapeHtml(u.fullname)}</strong>
+            <strong>${this.escapeHtml(u.fullname)}</strong>${moderationBadge}
           </td>
           <td>@${this.escapeHtml(u.username)}<br><span style="font-size: 0.75rem; color: var(--text-muted);">${this.escapeHtml(u.email)}</span></td>
           <td>${this.escapeHtml(u.school || u.hometown || '--')}</td>
@@ -8531,19 +8536,10 @@ class AppClient {
   }
 
   // =========================================================================
-  // 17. ĐĂNG KÝ, ĐĂNG NHẬP, GOOGLE OAUTH & GMAIL OTP
+  // 17. ĐĂNG NHẬP BẰNG GOOGLE HOẶC TÀI KHOẢN CONNECTSPHERE
   // =========================================================================
-  switchAuthTab(tab) {
-    document.getElementById('tabLoginBtn')?.classList.toggle('active', tab === 'login');
-    document.getElementById('tabRegisterBtn')?.classList.toggle('active', tab === 'register');
-    document.getElementById('loginFormContainer').style.display = (tab === 'login') ? 'block' : 'none';
-    document.getElementById('registerStep1Container').style.display = (tab === 'register') ? 'block' : 'none';
-    document.getElementById('registerStep2Container').style.display = 'none';
-  }
-
-  ensureLegalTermsAccepted(flow = 'login') {
-    const checkboxId = flow === 'register' ? 'acceptRegisterLegalTerms' : 'acceptLoginLegalTerms';
-    const checkbox = document.getElementById(checkboxId);
+  ensureLegalTermsAccepted() {
+    const checkbox = document.getElementById('acceptLoginLegalTerms');
     if (checkbox && checkbox.checked) return true;
     this.showToast('Vui lòng đồng ý với Điều khoản sử dụng và Chính sách quyền riêng tư để tiếp tục.', 'error');
     checkbox?.focus();
@@ -8582,125 +8578,19 @@ class AppClient {
     }
   }
 
-  async handleRegisterStep1() {
-    if (!this.ensureLegalTermsAccepted('register')) return;
-    const fn = document.getElementById('regFullname').value.trim();
-    const un = document.getElementById('regUsername').value.trim();
-    const em = document.getElementById('regEmail').value.trim();
-    const pw = document.getElementById('regPassword').value;
-    const cpw = document.getElementById('regConfirmPassword').value;
-
-    if (!fn || !un || !em || !pw || !cpw) {
-      this.showToast('Vui lòng điền đầy đủ tất cả các trường!', 'error');
-      return;
-    }
-
-    if (pw !== cpw) {
-      this.showToast('Xác nhận mật khẩu không khớp!', 'error');
-      return;
-    }
-
-    this.tempRegisterData = { fullname: fn, username: un, email: em, password: pw };
-
-    try {
-      const res = await fetch('/api/auth/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: em, purpose: 'REGISTER', accept_terms: true })
-      });
-      const data = await res.json();
-      if (data.status === 'ok') {
-        this.showToast(data.message, 'success');
-        document.getElementById('registerStep1Container').style.display = 'none';
-        document.getElementById('registerStep2Container').style.display = 'block';
-        document.getElementById('otpDisplayEmail').textContent = em;
-
-        // Bắt đầu đếm ngược OTP
-        this.startOtpTimer(300);
-      } else {
-        this.showToast(data.message || 'Không thể gửi mã xác nhận!', 'error');
-      }
-    } catch (err) {
-      this.showToast('Lỗi: ' + err.message, 'error');
-    }
-  }
-
-  startOtpTimer(seconds) {
-    if (this.otpTimerInterval) clearInterval(this.otpTimerInterval);
-    let left = seconds;
-    const timerSpan = document.getElementById('otpCountdown');
-    if (timerSpan) timerSpan.textContent = `${Math.floor(left / 60)}:${left % 60 < 10 ? '0' : ''}${left % 60}`;
-    this.otpTimerInterval = setInterval(() => {
-      left--;
-      if (timerSpan) {
-        const m = Math.floor(left / 60);
-        const s = left % 60;
-        timerSpan.textContent = `${m}:${s < 10 ? '0' : ''}${s}`;
-      }
-      if (left <= 0) {
-        clearInterval(this.otpTimerInterval);
-        this.otpTimerInterval = null;
-      }
-    }, 1000);
-  }
-
-  onOtpInput(input, nextId) {
-    input.value = input.value.replace(/\D/g, '').slice(0, 1);
-    if (input.value && nextId) document.getElementById(nextId)?.focus();
-  }
-
-  backToRegisterStep1() {
-    if (this.otpTimerInterval) {
-      clearInterval(this.otpTimerInterval);
-      this.otpTimerInterval = null;
-    }
-    document.getElementById('registerStep2Container').style.display = 'none';
-    document.getElementById('registerStep1Container').style.display = 'block';
-  }
-
-  async handleVerifyOtpAndRegister() {
-    if (!this.ensureLegalTermsAccepted('register')) return;
-    const b1 = document.getElementById('otp1').value;
-    const b2 = document.getElementById('otp2').value;
-    const b3 = document.getElementById('otp3').value;
-    const b4 = document.getElementById('otp4').value;
-    const b5 = document.getElementById('otp5').value;
-    const b6 = document.getElementById('otp6').value;
-    const code = `${b1}${b2}${b3}${b4}${b5}${b6}`.trim();
-
-    if (code.length !== 6) {
-      this.showToast('Vui lòng nhập đủ 6 chữ số mã xác thực!', 'error');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/auth/register-with-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...this.tempRegisterData,
-          code: code,
-          accept_terms: true
-        })
-      });
-      const data = await res.json();
-      if (data.status === 'ok') {
-        this.currentUser = data.user;
-        localStorage.setItem('cs_user', JSON.stringify(this.currentUser));
-        this.showToast('Đăng ký tài khoản thành công!', 'success');
-        window.location.reload();
-      } else {
-        this.showToast(data.message || 'Mã xác thực không đúng!', 'error');
-      }
-    } catch (err) {
-      this.showToast('Lỗi: ' + err.message, 'error');
-    }
-  }
-
   openGoogleAuthModal() {
     if (!this.ensureLegalTermsAccepted()) return;
     const modal = document.getElementById('googleAuthModal');
     if (modal) modal.style.display = 'flex';
+    this.pendingGoogleCredential = null;
+    const setup = document.getElementById('googleCredentialSetup');
+    if (setup) setup.style.display = 'none';
+    const button = document.getElementById('googleSignInButton');
+    if (button) button.style.display = 'flex';
+    const username = document.getElementById('googleSetupUsername');
+    const password = document.getElementById('googleSetupPassword');
+    if (username) username.value = '';
+    if (password) password.value = '';
     this.triggerRealGoogleSignIn();
   }
 
@@ -8772,14 +8662,33 @@ class AppClient {
       this.showToast('Google không trả về thông tin xác thực. Vui lòng thử lại.', 'error');
       return;
     }
+    this.pendingGoogleCredential = response.credential;
+    await this.submitGoogleCredential();
+  }
+
+  async submitGoogleCredential(username = '', password = '') {
     try {
       const res = await fetch('/api/auth/google-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: response.credential, accept_terms: true })
+        body: JSON.stringify({
+          credential: this.pendingGoogleCredential,
+          username,
+          password,
+          accept_terms: true
+        })
       });
       const data = await res.json();
+      if (data.status === 'setup_required') {
+        const button = document.getElementById('googleSignInButton');
+        const setup = document.getElementById('googleCredentialSetup');
+        if (button) button.style.display = 'none';
+        if (setup) setup.style.display = 'block';
+        document.getElementById('googleSetupUsername')?.focus();
+        return;
+      }
       if (data.status === 'ok') {
+        this.pendingGoogleCredential = null;
         this.currentUser = data.user;
         localStorage.setItem('cs_user', JSON.stringify(this.currentUser));
         this.showToast('Đăng nhập tài khoản Google thành công!', 'success');
@@ -8793,9 +8702,26 @@ class AppClient {
     }
   }
 
+  async completeGoogleCredentialSetup() {
+    if (!this.pendingGoogleCredential) {
+      this.showToast('Phiên xác minh Google đã hết hạn. Vui lòng xác minh lại.', 'error');
+      return;
+    }
+    const username = document.getElementById('googleSetupUsername')?.value.trim() || '';
+    const password = document.getElementById('googleSetupPassword')?.value || '';
+    if (!username || !password) {
+      this.showToast('Vui lòng nhập tên đăng nhập và mật khẩu ConnectSphere.', 'error');
+      return;
+    }
+    await this.submitGoogleCredential(username, password);
+  }
+
   closeGoogleAuthModal() {
     const modal = document.getElementById('googleAuthModal');
     if (modal) modal.style.display = 'none';
+    this.pendingGoogleCredential = null;
+    const password = document.getElementById('googleSetupPassword');
+    if (password) password.value = '';
   }
 
   // =========================================================================

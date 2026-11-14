@@ -4,15 +4,15 @@ ConnectSphere là ứng dụng mạng xã hội mini, cung cấp các chức nă
 
 ## Tính năng
 
-- **Tài khoản và hồ sơ:** đăng ký, đăng nhập, xác thực email bằng OTP và quản lý trang cá nhân.
-- **Quyền riêng tư:** người dùng cần đồng ý Điều khoản sử dụng và Chính sách quyền riêng tư trước khi đăng nhập hoặc đăng ký.
+- **Tài khoản và hồ sơ:** đăng nhập bằng Google hoặc bằng email/tên đăng nhập và mật khẩu; tài khoản mới được tạo qua Google.
+- **Quyền riêng tư:** người dùng cần đồng ý Điều khoản sử dụng và Chính sách quyền riêng tư trước khi đăng nhập.
 - **Bảng tin:** đăng bài, chia sẻ hình ảnh/video, bày tỏ cảm xúc và bình luận, bao gồm phản hồi bình luận.
 - **Kết nối bạn bè:** gửi và xử lý lời mời kết bạn, tìm kiếm người dùng và xem gợi ý kết bạn.
 - **Nhóm cộng đồng:** tạo nhóm, tham gia nhóm và đăng bài trong nhóm.
 - **Nhắn tin:** trò chuyện trực tiếp và nhắn tin nhóm.
 - **Tìm kiếm và thông báo:** tìm người dùng, nhóm, bài viết; nhận thông báo về các hoạt động liên quan.
 - **Quản trị:** bảng điều khiển quản trị hỗ trợ theo dõi hoạt động và xử lý báo cáo.
-- **Tích hợp tùy chọn:** Gemini hỗ trợ phân loại nội dung; Google Sign-In có thể bật khi cấu hình thông tin xác thực.
+- **Tích hợp:** Google Sign-In dùng để tạo tài khoản và đăng nhập; Gemini hỗ trợ kiểm duyệt nội dung khi được cấu hình.
 
 ## Công nghệ
 
@@ -53,7 +53,7 @@ Dự án có thể build trên Linux bằng CMake và deploy trên Render qua Do
    - `ADMIN_PASSWORD` với mật khẩu quản trị mạnh
    - `COOKIE_SECURE=1`
    - `TRUST_PROXY=1`
-   - Thêm `SMTP_EMAIL` và `SMTP_PASSWORD` nếu cần gửi OTP; `GEMINI_API_KEY` hoặc `GOOGLE_CLIENT_ID` nếu dùng các tích hợp tương ứng.
+   - Thêm `GOOGLE_CLIENT_ID` để bật đăng nhập/tạo tài khoản bằng Google. Có thể thêm `GEMINI_API_KEY` để bật kiểm duyệt nội dung bằng Gemini.
 4. Để dữ liệu không mất sau khi service khởi động lại hoặc deploy, gắn persistent disk tại `/app/data`. Ứng dụng lưu SQLite tại `data/social_network.db`.
 5. Deploy. Ứng dụng tự đọc `PORT` do Render cấp; không cần đặt cổng cố định.
 
@@ -65,15 +65,19 @@ Có thể truyền cấu hình qua biến môi trường hoặc file `.env` cụ
 
 | Biến | Mục đích |
 | --- | --- |
-| `SMTP_EMAIL`, `SMTP_PASSWORD` | Gửi email OTP |
-| `GEMINI_API_KEY` | Kết nối Gemini API |
-| `GOOGLE_CLIENT_ID` | Cấu hình Google Sign-In |
+| `GEMINI_API_KEY` | Kết nối Gemini để kiểm duyệt bài viết, bình luận và báo cáo |
+| `GEMINI_MODEL` | Tùy chọn chọn model Gemini; mặc định `gemini-2.0-flash` |
+| `GOOGLE_CLIENT_ID` | Bắt buộc để đăng nhập Google và tạo tài khoản mới |
 | `ADMIN_PASSWORD` | Đặt mật khẩu tài khoản quản trị |
 | `SEED_DEMO_DATA=1` | Nạp dữ liệu mẫu khi khởi tạo cơ sở dữ liệu trống |
 
-Để gửi OTP qua Gmail, `SMTP_PASSWORD` phải là **Google App Password** (cần bật xác minh 2 bước), không phải mật khẩu đăng nhập Gmail thông thường.
-
 Không đưa `.env`, mật khẩu hoặc API key vào repository.
+
+Tài khoản mới chỉ được tạo qua Google. Lần đầu đăng nhập Google, người dùng cần đặt tên đăng nhập và mật khẩu riêng của ConnectSphere; sau đó có thể đăng nhập bằng email Google hoặc tên đăng nhập cùng mật khẩu. Mật khẩu Google không được yêu cầu.
+
+## Kiểm duyệt nội dung
+
+Máy chủ kiểm tra văn bản bài viết, bình luận (bao gồm nội dung nhóm) và nội dung được người dùng báo cáo. Khi có `GEMINI_API_KEY`, văn bản được gửi tới Gemini để đánh giá; nếu không có key hoặc API tạm lỗi, máy chủ dùng bộ lọc từ khóa cục bộ nên khả năng nhận diện sẽ hạn chế hơn. Nội dung bị đánh giá vi phạm sẽ bị từ chối hoặc gỡ và người đăng nhận thông báo cảnh cáo. Vi phạm được ghi nhận theo cửa sổ 30 ngày; từ lần thứ tư trong 30 ngày, tài khoản bị khóa và các phiên đăng nhập bị thu hồi. Kết quả báo cáo chưa xác nhận vi phạm vẫn được chuyển cho quản trị viên xem xét.
 
 ## Cấu trúc dự án
 

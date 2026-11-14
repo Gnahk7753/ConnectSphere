@@ -2,7 +2,7 @@
 // ============================================================================
 //  Security.h - Các thành phần bảo mật dùng chung cho toàn dự án
 //  - SHA-256 / HMAC-SHA256 / PBKDF2 (băm mật khẩu có salt, không lưu plaintext)
-//  - Sinh số ngẫu nhiên an toàn (CSPRNG) cho token / OTP / salt
+//  - Sinh số ngẫu nhiên an toàn (CSPRNG) cho token / salt
 //  - Rate limiter (token bucket) + bộ đếm đăng nhập sai (chống brute-force)
 //  - Hàm kiểm tra / làm sạch dữ liệu đầu vào (email, username, tên, URL media)
 //  Không phụ thuộc thư viện ngoài, chạy được trên Windows (MinGW) và Linux.
@@ -58,20 +58,6 @@ inline std::string randomToken(size_t bytes = 32) {
     std::vector<uint8_t> b(bytes);
     randomBytes(b.data(), bytes);
     return toHex(b.data(), bytes);
-}
-
-// Chuỗi 6 chữ số (có thể bắt đầu bằng 0), lấy mẫu loại bỏ lệch (rejection sampling)
-inline std::string randomDigits6() {
-    const uint32_t limit = (0xFFFFFFFFu / 1000000u) * 1000000u;
-    uint32_t v = 0;
-    do {
-        uint8_t b[4];
-        randomBytes(b, 4);
-        v = (uint32_t(b[0]) << 24) | (uint32_t(b[1]) << 16) | (uint32_t(b[2]) << 8) | uint32_t(b[3]);
-    } while (v >= limit);
-    v %= 1000000u;
-    std::string s = std::to_string(v);
-    return std::string(6 - s.size(), '0') + s;
 }
 
 // So sánh chuỗi trong thời gian không phụ thuộc nội dung (chống timing attack)
@@ -331,7 +317,7 @@ private:
 };
 
 // ----------------------------------------------------------------------------
-// Bộ đếm lần thất bại (đăng nhập / OTP) với khóa tạm thời
+// Bộ đếm lần đăng nhập thất bại với khóa tạm thời
 // ----------------------------------------------------------------------------
 class FailTracker {
 public:

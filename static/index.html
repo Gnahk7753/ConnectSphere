@@ -413,25 +413,18 @@
     </div>
   </div>
 
-  <!-- ================= MODAL ĐĂNG NHẬP / ĐĂNG KÝ (KHÔNG NHẬP TRƯỚC TÀI KHOẢN, CÓ XÁC NHẬN MẬT KHẨU) ================= -->
+  <!-- ================= MODAL ĐĂNG NHẬP ================= -->
   <div class="modal-overlay" id="authModal" style="display: none;">
     <div class="auth-card">
       <div class="auth-header">
         <h2><img class="auth-logo" src="img/logo.svg" alt="ConnectSphere"></h2>
-        <p>Nền tảng mạng xã hội C++ đa luồng & SQLite</p>
+        <p>Đăng nhập bằng Google hoặc tài khoản ConnectSphere</p>
       </div>
 
-      <!-- TABS: Đăng nhập / Đăng ký -->
-      <div class="auth-tabs">
-        <button class="auth-tab active" id="tabLoginBtn" onclick="app.switchAuthTab('login')">Đăng Nhập</button>
-        <button class="auth-tab" id="tabRegisterBtn" onclick="app.switchAuthTab('register')">Đăng Ký</button>
-      </div>
-
-      <!-- FORM ĐĂNG NHẬP: BẮT NGƯỜI DÙNG TỰ NHẬP, KHÔNG ĐIỀN TRƯỚC -->
       <div id="loginFormContainer">
         <div class="form-group">
-          <label>Tài khoản hoặc Gmail</label>
-          <input type="text" id="loginIdentifier" placeholder="Nhập tài khoản hoặc email của bạn">
+          <label>Tên đăng nhập hoặc email Google</label>
+          <input type="text" id="loginIdentifier" placeholder="Nhập tên đăng nhập hoặc email">
         </div>
         <div class="form-group">
           <label>Mật khẩu</label>
@@ -460,76 +453,6 @@
           </span>
         </label>
       </div>
-
-      <!-- FORM ĐĂNG KÝ: CÓ XÁC NHẬN MẬT KHẨU -->
-      <div id="registerStep1Container" style="display: none;">
-        <div class="form-group">
-          <label>Họ và tên</label>
-          <input type="text" id="regFullname" placeholder="Nguyễn Văn A">
-        </div>
-        <div class="form-group">
-          <label>Tên đăng nhập</label>
-          <input type="text" id="regUsername" placeholder="nguyenvana">
-        </div>
-        <div class="form-group">
-          <label>Địa chỉ Gmail</label>
-          <input type="email" id="regEmail" placeholder="your_email@gmail.com">
-        </div>
-        <div class="form-group">
-          <label>Mật khẩu</label>
-          <input type="password" id="regPassword" placeholder="Nhập mật khẩu an toàn">
-        </div>
-        <!-- Thêm xác nhận mật khẩu -->
-        <div class="form-group">
-          <label>Xác nhận mật khẩu</label>
-          <input type="password" id="regConfirmPassword" placeholder="Nhập lại mật khẩu ở trên">
-        </div>
-        <label class="auth-legal-consent">
-          <input type="checkbox" id="acceptRegisterLegalTerms">
-          <span>Tôi đã đọc và đồng ý với
-            <a href="terms.html" target="_blank" rel="noopener noreferrer">Điều khoản sử dụng</a> và
-            <a href="privacy.html" target="_blank" rel="noopener noreferrer">Chính sách quyền riêng tư</a>.
-          </span>
-        </label>
-        <button type="button" class="btn-primary btn-full" onclick="app.handleRegisterStep1()">
-          📩 Nhận mã xác thực qua Gmail
-        </button>
-      </div>
-
-      <!-- BƯỚC 2: TỰ NHẬP MÃ 6 CHỮ SỐ (KHÔNG TỰ ĐIỀN) -->
-      <div id="registerStep2Container" style="display: none;">
-        <div style="text-align: center; margin-bottom: 1rem;">
-          <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">📬</div>
-          <h3 style="font-size: 1.15rem; margin-bottom: 0.3rem;">Xác thực mã 6 chữ số</h3>
-          <p style="font-size: 0.85rem; color: var(--text-muted);">
-            Vui lòng nhập mã OTP 6 số vừa gửi tới Gmail: <br><strong id="otpDisplayEmail" style="color: var(--primary);">--</strong>
-          </p>
-        </div>
-
-        <!-- 6 ô số hoàn toàn để trống để người dùng tự nhập -->
-        <div class="otp-container">
-          <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" class="otp-box" id="otp1" oninput="app.onOtpInput(this, 'otp2')">
-          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp2" oninput="app.onOtpInput(this, 'otp3')">
-          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp3" oninput="app.onOtpInput(this, 'otp4')">
-          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp4" oninput="app.onOtpInput(this, 'otp5')">
-          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp5" oninput="app.onOtpInput(this, 'otp6')">
-          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp6" oninput="app.onOtpInput(this, null)">
-        </div>
-
-        <div class="otp-timer">
-          Mã có hiệu lực trong: <span id="otpCountdown">05:00</span>
-        </div>
-
-        <button type="button" class="btn-primary btn-full" onclick="app.handleVerifyOtpAndRegister()">
-          ✅ Xác nhận & Hoàn tất đăng ký
-        </button>
-
-        <div style="text-align: center; margin-top: 1rem; font-size: 0.85rem;">
-          Không nhận được mã? <span class="otp-resend" onclick="app.handleRegisterStep1()">Gửi lại mã</span>
-          <br>
-          <span style="font-size: 0.8rem; color: var(--text-muted); cursor: pointer;" onclick="app.backToRegisterStep1()">← Quay lại sửa thông tin</span>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -541,11 +464,22 @@
       </div>
       <h2 id="googleAuthTitle">Đăng nhập bằng Google</h2>
       <p style="color: var(--text-muted); margin: 0.75rem 0 1.25rem;">
-        Tiếp tục an toàn bằng tài khoản Google của bạn.
+        Đăng nhập an toàn bằng Google. Nếu là lần đầu, bạn sẽ tạo tên đăng nhập và mật khẩu ConnectSphere để sau này có thể đăng nhập bằng email hoặc tên đăng nhập.
       </p>
       <div id="googleSignInButton" style="min-height: 44px; display: flex; justify-content: center; align-items: center;"></div>
+      <div id="googleCredentialSetup" style="display: none; text-align: left; margin-top: 1rem;">
+        <div class="form-group">
+          <label for="googleSetupUsername">Tên đăng nhập ConnectSphere</label>
+          <input type="text" id="googleSetupUsername" autocomplete="username" maxlength="30" placeholder="Tên đăng nhập (3-30 ký tự)">
+        </div>
+        <div class="form-group">
+          <label for="googleSetupPassword">Mật khẩu ConnectSphere</label>
+          <input type="password" id="googleSetupPassword" autocomplete="new-password" maxlength="128" placeholder="Ít nhất 8 ký tự, gồm chữ và số">
+        </div>
+        <button type="button" class="btn-primary" style="width: 100%;" onclick="app.completeGoogleCredentialSetup()">Tạo tài khoản đăng nhập</button>
+      </div>
       <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 1.25rem;">
-        ConnectSphere chỉ nhận thông tin xác thực do Google cấp; không yêu cầu mật khẩu Google của bạn.
+        Mật khẩu này chỉ dùng cho ConnectSphere, không phải mật khẩu Google. Không chia sẻ mật khẩu Google với ứng dụng.
       </p>
     </div>
   </div>
@@ -959,7 +893,7 @@
     <div class="auth-card" style="max-width: 420px;">
       <div class="auth-header">
         <h2 id="reportModalHeading">🚩 Báo cáo vi phạm</h2>
-        <p>Báo cáo sẽ được chuyển thẳng tới Quản trị viên hệ thống</p>
+        <p>AI sẽ kiểm tra bài viết/bình luận được báo cáo; các trường hợp chưa rõ sẽ chuyển Quản trị viên xem xét.</p>
       </div>
       <div class="form-group">
         <label>Lý do báo cáo:</label>
@@ -1030,6 +964,6 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261114-theme-fix2"></script>
+  <script src="js/app.js?v=20261115-google-only"></script>
 </body>
 </html>

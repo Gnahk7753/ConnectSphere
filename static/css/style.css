@@ -1908,51 +1908,6 @@ button.sidebar-nav-item {
   padding: 0 0.8rem;
 }
 
-/* Há»™p xÃ¡c thá»±c OTP 6 sá»‘ */
-.otp-container {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin: 1rem 0;
-}
-
-.otp-box {
-  width: 48px;
-  height: 54px;
-  text-align: center;
-  font-size: 1.5rem;
-  font-weight: 700;
-  background-color: var(--bg-surface-secondary);
-  border: 2px solid var(--border-color);
-  border-radius: 8px;
-  color: var(--text-main);
-  outline: none;
-}
-
-.otp-box:focus {
-  border-color: var(--primary);
-  background-color: var(--bg-surface);
-}
-
-.otp-timer {
-  text-align: center;
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  margin-bottom: 1rem;
-}
-
-.otp-timer span {
-  color: var(--primary);
-  font-weight: 700;
-}
-
-.otp-resend {
-  color: var(--primary);
-  cursor: pointer;
-  text-decoration: underline;
-  font-weight: 600;
-}
-
 /* ================= GOOGLE CHOOSER ACCOUNTS ================= */
 .google-account-list {
   display: flex;

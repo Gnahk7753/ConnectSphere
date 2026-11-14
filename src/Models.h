@@ -91,6 +91,7 @@ struct User {
     std::string birthday;
     std::string residence;
     std::string user_token;
+    bool moderation_flagged = false;
 
     bool isOnline() const {
         return PresenceRegistry::instance().isOnline(id);
@@ -121,6 +122,7 @@ struct User {
         // Thông tin riêng tư (email) chỉ trả về cho chính chủ hoặc admin; google_id không bao giờ ra ngoài
         if (includePrivate) {
             j["email"] = email;
+            j["moderation_flagged"] = moderation_flagged;
         }
         return j;
     }
@@ -546,6 +548,8 @@ struct Report {
     std::string resolved_by;
     std::string resolved_at;
     std::string reported_post_content;
+    std::string ai_action;
+    std::string ai_reason;
 
     json toJson() const {
         return {
@@ -563,7 +567,17 @@ struct Report {
             {"resolution_note", resolution_note},
             {"resolved_by", resolved_by},
             {"resolved_at", resolved_at},
-            {"reported_post_content", reported_post_content}
+            {"reported_post_content", reported_post_content},
+            {"ai_action", ai_action},
+            {"ai_reason", ai_reason}
         };
     }
+};
+
+struct ModerationTarget {
+    std::string type;
+    std::string id;
+    std::string author_id;
+    std::string title;
+    std::string content;
 };

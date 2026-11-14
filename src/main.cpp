@@ -14,7 +14,6 @@
 #include "Models.h"
 #include "Database.h"
 #include "SuggestService.h"
-#include "SmtpService.h"
 #include "GeminiService.h"
 
 using json = nlohmann::json;
@@ -180,6 +179,37 @@ static void sendJsonError(httplib::Response& res, int status, const std::string&
     res.set_content(json({{"status", "error"}, {"message", msg}}).dump(), "application/json; charset=utf-8");
 }
 
+static bool rejectModeratedContent(Database& db, const std::string& userId, const std::string& targetType,
+                                   const GeminiModerationResult& moderation, httplib::Response& res) {
+    if (moderation.action != "BLOCK") return false;
+
+    int violationCount = 0;
+    bool accountLocked = false;
+    const bool recorded = db.recordModerationViolation(userId, "SUBMISSION", targetType, "",
+                                                       moderation.reason, violationCount, accountLocked);
+    const std::string message = recorded
+        ? (accountLocked
+            ? "Nội dung bị từ chối vì vi phạm nguyên tắc cộng đồng. Tài khoản đã bị khóa sau " +
+                std::to_string(violationCount) + " lần vi phạm trong 30 ngày."
+            : "Nội dung bị từ chối vì vi phạm nguyên tắc cộng đồng. Cảnh cáo " +
+                std::to_string(violationCount) + "/4 trong 30 ngày.")
+        : "Nội dung bị từ chối vì vi phạm nguyên tắc cộng đồng, nhưng hệ thống chưa ghi được cảnh cáo. Vui lòng thử lại sau.";
+    res.status = recorded ? (accountLocked ? 403 : 400) : 500;
+    res.set_content(json({
+        {"status", "error"},
+        {"message", message},
+        {"account_locked", recorded && accountLocked},
+        {"moderation", {
+            {"risk_level", moderation.risk_level},
+            {"action", moderation.action},
+            {"reason", moderation.reason},
+            {"flags", moderation.flags},
+            {"used_ai", moderation.used_ai}
+        }}
+    }).dump(), "application/json; charset=utf-8");
+    return true;
+}
+
 static void sendTooMany(httplib::Response& res, int retryAfterSec = 10, const std::string& msg = "Bạn thao tác quá nhanh. Vui lòng thử lại sau ít giây.") {
     res.set_header("Retry-After", std::to_string(std::max(1, retryAfterSec)));
     sendJsonError(res, 429, msg);
@@ -298,8 +328,8 @@ static bool originAllowed(const httplib::Request& req) {
 enum class AuthMode { Public, Session, AdminToken, SessionOrAdmin };
 
 static AuthMode authModeFor(const std::string& p) {
-    if (p == "/api/auth/send-otp" || p == "/api/auth/register-with-otp" || p == "/api/auth/login" ||
-        p == "/api/auth/google-login" || p == "/api/auth/config" || p == "/api/auth/logout") return AuthMode::Public;
+    if (p == "/api/auth/login" || p == "/api/auth/google-login" ||
+        p == "/api/auth/config" || p == "/api/auth/logout") return AuthMode::Public;
     if (p.rfind("/api/admin/", 0) == 0) return AuthMode::AdminToken;
     if (p == "/api/users/heartbeat" || p == "/api/users/offline") return AuthMode::SessionOrAdmin;
     return AuthMode::Session;
@@ -547,7 +577,7 @@ int main() {
 
     std::cout << "============================================================" << std::endl;
     std::cout << "  MẠNG XÃ HỘI MINI C++ (Web Platform & SQL Database)" << std::endl;
-    std::cout << "  Xác thực Gmail OTP 6 số | Thuật toán gợi ý bạn bè BFS" << std::endl;
+    std::cout << "  Google Sign-In | Thuật toán gợi ý bạn bè BFS" << std::endl;
     std::cout << "  Gemini AI kiểm duyệt | News Feed Ranking" << std::endl;
     std::cout << "============================================================" << std::endl;
 
@@ -653,108 +683,7 @@ int main() {
         res.set_content(json({{"status", "ok"}, {"google_client_id", gGoogleClientId}}).dump(), "application/json; charset=utf-8");
     });
 
-    // -------------------------------------------------------------
-    // 1. AUTHENTICATION & GMAIL OTP 6-DIGIT VERIFICATION
-    // -------------------------------------------------------------
-    R.Post("/api/auth/send-otp", [&db](const httplib::Request& req, httplib::Response& res) {
-        try {
-            const std::string ip = clientIp(req);
-            if (!gRate.allow("otp-ip:" + ip, 5, 1.0 / 120)) { sendTooMany(res, 120, "Bạn yêu cầu mã quá nhiều lần. Vui lòng thử lại sau vài phút."); return; }
-            auto body = json::parse(req.body);
-            if (!hasAcceptedLegalTerms(body)) {
-                sendJsonError(res, 400, "Vui lòng đồng ý với Chính sách quyền riêng tư và Điều khoản sử dụng trước khi tiếp tục.");
-                return;
-            }
-            const std::string email = sec::toLowerAscii(trimStr(getJsonStringSafe(body, "email")));
-            const std::string purpose = getJsonStringSafe(body, "purpose", "REGISTER");
-
-            if (!sec::isValidEmail(email)) { sendJsonError(res, 400, "Địa chỉ email không hợp lệ!"); return; }
-            if (purpose != "REGISTER") { sendJsonError(res, 400, "Mục đích xác thực không hợp lệ!"); return; }
-            if (!gRate.allow("otp-mail:" + email, 3, 1.0 / 60)) { sendTooMany(res, 60, "Vui lòng đợi khoảng 1 phút trước khi yêu cầu mã mới."); return; }
-
-            User existing;
-            if (db.getUserByUsernameOrEmail(email, existing)) { sendJsonError(res, 400, "Email này đã được đăng ký!"); return; }
-
-            const std::string otpCode = SmtpService::generate6DigitOtp();
-            if (!db.saveOtp(email, otpCode, purpose, 300)) { sendJsonError(res, 500, "Không thể tạo mã xác thực. Vui lòng thử lại."); return; }
-            if (!SmtpService::sendOtpEmail(email, otpCode, "Xác thực đăng ký tài khoản")) {
-                sendJsonError(res, 503, "Không gửi được mã OTP. Kiểm tra cấu hình SMTP_EMAIL, SMTP_PASSWORD và Gmail App Password trên máy chủ.");
-                return;
-            }
-            json resp = {{"status", "ok"}, {"message", "Mã xác thực 6 chữ số đã được gửi tới: " + email}};
-            // CHỈ dùng khi phát triển cục bộ. Trả mã OTP về client = ai cũng đăng ký được bằng email của người khác.
-            if (sec::envFlag("DEV_SHOW_OTP") && !sec::envFlag("PRODUCTION")) resp["code_for_user"] = otpCode;
-            res.set_content(resp.dump(), "application/json; charset=utf-8");
-        } catch (const std::exception&) {
-            sendJsonError(res, 400, "Yêu cầu không hợp lệ.");
-        }
-    });
-
-    R.Post("/api/auth/register-with-otp", [&db](const httplib::Request& req, httplib::Response& res) {
-        try {
-            const std::string ip = clientIp(req);
-            // Chống tạo hàng loạt tài khoản clone từ một địa chỉ IP: tối đa MAX_REGISTER_PER_IP_PER_DAY tài khoản / 24 giờ / IP (mặc định 10)
-            const double maxPerDay = static_cast<double>(sec::envInt("MAX_REGISTER_PER_IP_PER_DAY", 10));
-            if (!gRate.allow("regtry-ip:" + ip, 20, 20.0 / 3600)) { sendTooMany(res, 600); return; }
-            if (!gRate.peek("reg-ip:" + ip, maxPerDay, maxPerDay / 86400.0)) { sendTooMany(res, 3600, "Địa chỉ này đã đăng ký quá nhiều tài khoản hôm nay. Vui lòng thử lại sau."); return; }
-            auto body = json::parse(req.body);
-            if (!hasAcceptedLegalTerms(body)) {
-                sendJsonError(res, 400, "Vui lòng đồng ý với Chính sách quyền riêng tư và Điều khoản sử dụng trước khi tiếp tục.");
-                return;
-            }
-            const std::string email = sec::toLowerAscii(trimStr(getJsonStringSafe(body, "email")));
-            const std::string code = trimStr(getJsonStringSafe(body, "code"));
-            const std::string username = trimStr(getJsonStringSafe(body, "username"));
-            const std::string password = getJsonStringSafe(body, "password");
-            const std::string fullname = sec::sanitizeLine(getJsonStringSafe(body, "fullname"), 80);
-
-            if (email.empty() || code.empty() || username.empty() || password.empty() || fullname.empty()) {
-                sendJsonError(res, 400, "Vui lòng nhập đầy đủ các trường thông tin và mã 6 số!");
-                return;
-            }
-            if (!sec::isValidEmail(email)) { sendJsonError(res, 400, "Địa chỉ email không hợp lệ!"); return; }
-            if (!sec::isValidUsername(username)) { sendJsonError(res, 400, "Tên đăng nhập chỉ gồm chữ, số, dấu _ hoặc . (3-30 ký tự)!"); return; }
-            {
-                static const std::set<std::string> reserved = {"admin", "administrator", "root", "system", "support", "moderator", "mod", "staff", "quantri"};
-                if (reserved.count(sec::toLowerAscii(username))) { sendJsonError(res, 400, "Tên đăng nhập này không được phép sử dụng!"); return; }
-            }
-            if (sec::utf8Length(fullname) < 2) { sendJsonError(res, 400, "Họ tên không hợp lệ!"); return; }
-            std::string why;
-            if (!sec::isStrongPassword(password, &why)) { sendJsonError(res, 400, why); return; }
-
-            double retry = 0;
-            if (gFails.isLocked("otp:" + email, &retry)) { sendTooMany(res, static_cast<int>(retry) + 1, "Nhập sai mã quá nhiều lần. Vui lòng thử lại sau."); return; }
-            if (!db.verifyOtp(email, code, "REGISTER")) {
-                gFails.recordFail("otp:" + email, 10, 900, 900);
-                sendJsonError(res, 400, "Mã xác thực 6 chữ số không đúng hoặc đã hết hạn!");
-                return;
-            }
-
-            User existing;
-            if (db.getUserByUsernameOrEmail(username, existing)) { sendJsonError(res, 400, "Tên đăng nhập đã tồn tại trong hệ thống!"); return; }
-            if (db.getUserByUsernameOrEmail(email, existing)) { sendJsonError(res, 400, "Email đã được sử dụng bởi tài khoản khác!"); return; }
-
-            User newUser;
-            newUser.id = db.generateNewUserId();
-            newUser.username = username;
-            newUser.email = email;
-            newUser.password_hash = sec::hashPassword(password);
-            newUser.fullname = fullname;
-            newUser.avatar = "/img/default-avatar.svg";
-            newUser.bio = "Chào mừng tôi đến với Mạng Xã Hội Mini!";
-            newUser.role = "USER";
-            newUser.status = "ACTIVE";
-
-            if (!db.createUser(newUser)) { sendJsonError(res, 500, "Lỗi lưu tài khoản vào cơ sở dữ liệu!"); return; }
-            gRate.allow("reg-ip:" + ip, maxPerDay, maxPerDay / 86400.0);  // chỉ tính vào hạn mức khi đăng ký thành công
-            const std::string token = db.createUserSession(newUser.id, ip, req.get_header_value("User-Agent"));
-            if (!token.empty()) setSessionCookie(req, res, token);
-            res.set_content(json({{"status", "ok"}, {"message", "Xác thực Gmail và đăng ký tài khoản thành công!"}, {"user", newUser.toJson(true)}}).dump(), "application/json; charset=utf-8");
-        } catch (const std::exception&) {
-            sendJsonError(res, 400, "Yêu cầu không hợp lệ.");
-        }
-    });
-
+    // Chỉ đăng nhập bằng Google hoặc bằng thông tin tài khoản ConnectSphere.
     R.Post("/api/auth/login", [&db](const httplib::Request& req, httplib::Response& res) {
         try {
             const std::string ip = clientIp(req);
@@ -852,29 +781,99 @@ int main() {
             if (exp <= sec::epochSeconds()) { sendJsonError(res, 401, "Phiên Google đã hết hạn, vui lòng thử lại!"); return; }
             const std::string email = sec::toLowerAscii(getJsonStringSafe(tok, "email"));
             if (!sec::isValidEmail(email)) { sendJsonError(res, 400, "Email Google không hợp lệ!"); return; }
+            const std::string googleId = getJsonStringSafe(tok, "sub");
+            if (googleId.empty()) { sendJsonError(res, 401, "Google không trả về mã tài khoản hợp lệ."); return; }
 
+            const std::string username = trimStr(getJsonStringSafe(body, "username"));
+            const std::string password = getJsonStringSafe(body, "password");
             User user;
             bool isNew = false;
             if (db.getUserByUsernameOrEmail(email, user)) {
                 if (user.role == "ADMIN") { sendJsonError(res, 403, "Tài khoản quản trị viên chỉ đăng nhập bằng mật khẩu quản trị."); return; }
                 if (user.status == "LOCKED") { sendJsonError(res, 403, "Tài khoản này đã bị khóa!"); return; }
+                if (!user.google_id.empty() && user.google_id != googleId) {
+                    sendJsonError(res, 403, "Tài khoản ConnectSphere đã liên kết với một tài khoản Google khác.");
+                    return;
+                }
+                if (!sec::isHashedPassword(user.password_hash)) {
+                    if (username.empty() || password.empty()) {
+                        res.set_content(json({
+                            {"status", "setup_required"},
+                            {"message", "Tạo tên đăng nhập và mật khẩu ConnectSphere để lần sau có thể đăng nhập bằng Gmail hoặc tên đăng nhập."}
+                        }).dump(), "application/json; charset=utf-8");
+                        return;
+                    }
+                    if (!sec::isValidUsername(username)) {
+                        sendJsonError(res, 400, "Tên đăng nhập chỉ gồm chữ, số, dấu _ hoặc . (3-30 ký tự).");
+                        return;
+                    }
+                    static const std::set<std::string> reserved = {"admin", "administrator", "root", "system", "support", "moderator", "mod", "staff", "quantri"};
+                    if (reserved.count(sec::toLowerAscii(username))) {
+                        sendJsonError(res, 400, "Tên đăng nhập này không được phép sử dụng.");
+                        return;
+                    }
+                    std::string passwordError;
+                    if (!sec::isStrongPassword(password, &passwordError)) {
+                        sendJsonError(res, 400, passwordError);
+                        return;
+                    }
+                    User existing;
+                    if (db.getUserByUsernameOrEmail(username, existing) && existing.id != user.id) {
+                        sendJsonError(res, 409, "Tên đăng nhập đã được sử dụng.");
+                        return;
+                    }
+                    const std::string passwordHash = sec::hashPassword(password);
+                    if (!db.setGoogleCredentials(user.id, username, passwordHash, googleId)) {
+                        sendJsonError(res, 409, "Không thể lưu tên đăng nhập/mật khẩu. Hãy thử tên đăng nhập khác.");
+                        return;
+                    }
+                    user.username = username;
+                    user.password_hash = passwordHash;
+                    user.google_id = googleId;
+                } else if (user.google_id.empty() && !db.linkGoogleIdentity(user.id, googleId)) {
+                    sendJsonError(res, 409, "Không thể liên kết tài khoản Google với tài khoản này.");
+                    return;
+                }
             } else {
+                if (username.empty() || password.empty()) {
+                    res.set_content(json({
+                        {"status", "setup_required"},
+                        {"message", "Tạo tên đăng nhập và mật khẩu ConnectSphere để lần sau có thể đăng nhập bằng Gmail hoặc tên đăng nhập."}
+                    }).dump(), "application/json; charset=utf-8");
+                    return;
+                }
+                if (!sec::isValidUsername(username)) {
+                    sendJsonError(res, 400, "Tên đăng nhập chỉ gồm chữ, số, dấu _ hoặc . (3-30 ký tự).");
+                    return;
+                }
+                static const std::set<std::string> reserved = {"admin", "administrator", "root", "system", "support", "moderator", "mod", "staff", "quantri"};
+                if (reserved.count(sec::toLowerAscii(username))) {
+                    sendJsonError(res, 400, "Tên đăng nhập này không được phép sử dụng.");
+                    return;
+                }
+                std::string passwordError;
+                if (!sec::isStrongPassword(password, &passwordError)) {
+                    sendJsonError(res, 400, passwordError);
+                    return;
+                }
+                User existing;
+                if (db.getUserByUsernameOrEmail(username, existing)) {
+                    sendJsonError(res, 409, "Tên đăng nhập đã được sử dụng.");
+                    return;
+                }
                 isNew = true;
-                std::string base;
-                for (char c : email.substr(0, email.find('@'))) if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.') base += c;
-                if (base.size() < 3) base += "user";
-                base = base.substr(0, 22);
+                const std::string passwordHash = sec::hashPassword(password);
                 user = User();
                 user.id = db.generateNewUserId();
-                user.username = base + "_" + sec::randomDigits6().substr(0, 4);
+                user.username = username;
                 user.email = email;
-                user.password_hash = "!";  // không có mật khẩu: chỉ đăng nhập qua Google
-                user.fullname = sec::sanitizeLine(getJsonStringSafe(tok, "name", base), 80);
-                if (user.fullname.empty()) user.fullname = base;
+                user.password_hash = passwordHash;
+                user.fullname = sec::sanitizeLine(getJsonStringSafe(tok, "name", username), 80);
+                if (user.fullname.empty()) user.fullname = username;
                 const std::string pic = getJsonStringSafe(tok, "picture");
                 user.avatar = (!pic.empty() && sec::isSafeMediaUrl(pic, "IMAGE")) ? pic : "/img/default-avatar.svg";
                 user.bio = "Gia nhập qua tài khoản Google";
-                user.google_id = getJsonStringSafe(tok, "sub");
+                user.google_id = googleId;
                 user.role = "USER";
                 user.status = "ACTIVE";
                 if (!db.createUser(user)) { sendJsonError(res, 500, "Không thể tạo tài khoản từ Google!"); return; }
@@ -1354,21 +1353,7 @@ int main() {
 
             // --- Gemini AI: phân loại chủ đề + kiểm duyệt ---
             auto mod = GeminiService::instance().analyzePost(title, content);
-            if (mod.action == "BLOCK") {
-                res.status = 400;
-                res.set_content(json({
-                    {"status", "error"},
-                    {"message", "Bài viết bị từ chối đăng do nội dung không phù hợp: " + mod.reason},
-                    {"moderation", {
-                        {"risk_level", mod.risk_level},
-                        {"action", mod.action},
-                        {"reason", mod.reason},
-                        {"flags", mod.flags},
-                        {"used_ai", mod.used_ai}
-                    }}
-                }).dump(), "application/json; charset=utf-8");
-                return;
-            }
+            if (rejectModeratedContent(db, authorId, "POST", mod, res)) return;
 
             std::string modStatus = (mod.action == "FLAG") ? "FLAGGED" : "SAFE";
             std::string categoryTags;
@@ -1419,6 +1404,8 @@ int main() {
                 res.set_content(json({{"status", "error"}, {"message", "Thiếu user_id hoặc post_id."}}).dump(), "application/json; charset=utf-8");
                 return;
             }
+            const auto mod = GeminiService::instance().analyzeComment(thoughts);
+            if (rejectModeratedContent(db, userId, "REPOST", mod, res)) return;
 
             std::string newPostId;
             std::string errMessage;
@@ -1448,6 +1435,9 @@ int main() {
                 res.set_content(json({{"status", "error"}, {"message", "Nội dung bài viết không được để trống!"}}).dump(), "application/json; charset=utf-8");
                 return;
             }
+
+            const auto mod = GeminiService::instance().analyzePost(title, content);
+            if (rejectModeratedContent(db, authorId, "POST_EDIT", mod, res)) return;
 
             if (db.updatePost(postId, authorId, content, title, visibility)) {
                 res.set_content(json({{"status", "ok"}, {"message", "Đã cập nhật bài viết thành công!"}}).dump(), "application/json; charset=utf-8");
@@ -1562,6 +1552,9 @@ int main() {
                 res.set_content(json({{"status", "error"}, {"message", "Bình luận không được để trống!"}}).dump(), "application/json; charset=utf-8");
                 return;
             }
+
+            const auto mod = GeminiService::instance().analyzeComment(content);
+            if (rejectModeratedContent(db, authorId, "COMMENT", mod, res)) return;
 
             Comment newComment;
             if (db.addComment(postId, authorId, content, replyToId, replyToAuthor, newComment)) {
@@ -2680,12 +2673,68 @@ int main() {
                 return;
             }
 
-            if (db.createReport(reporterId, reportedUserId, reportedPostId, reportedCommentId, reason)) {
-                res.set_content(json({{"status", "ok"}, {"message", "Báo cáo của bạn đã được gửi tới Quản trị viên xử lý!"}}).dump(), "application/json; charset=utf-8");
-            } else {
+            int reportId = 0;
+            if (!db.createReport(reporterId, reportedUserId, reportedPostId, reportedCommentId, reason, &reportId)) {
                 res.status = 500;
                 res.set_content(json({{"status", "error"}, {"message", "Lỗi gửi báo cáo!"}}).dump(), "application/json; charset=utf-8");
+                return;
             }
+
+            ModerationTarget target;
+            std::string verifiedReporterId;
+            if (!db.getReportModerationTarget(reportId, target, verifiedReporterId)) {
+                res.set_content(json({
+                    {"status", "ok"},
+                    {"message", "Báo cáo đã được gửi tới Quản trị viên xử lý."},
+                    {"report_id", reportId},
+                    {"ai_action", "REVIEW"}
+                }).dump(), "application/json; charset=utf-8");
+                return;
+            }
+            if (verifiedReporterId != reporterId) {
+                sendJsonError(res, 500, "Không thể xác minh người gửi báo cáo.");
+                return;
+            }
+
+            const auto mod = (target.type == "COMMENT" || target.type == "GROUP_COMMENT")
+                ? GeminiService::instance().analyzeComment(target.content)
+                : GeminiService::instance().analyzePost(target.title, target.content);
+            if (mod.action == "BLOCK") {
+                int violationCount = 0;
+                bool accountLocked = false;
+                if (db.applyAiReportViolation(reportId, target, mod.reason, violationCount, accountLocked)) {
+                    res.set_content(json({
+                        {"status", "ok"},
+                        {"message", "AI đã xác nhận vi phạm; nội dung được gỡ và tài khoản đã bị gắn cờ."},
+                        {"report_id", reportId},
+                        {"ai_action", "BLOCK"},
+                        {"account_locked", accountLocked}
+                    }).dump(), "application/json; charset=utf-8");
+                    return;
+                }
+                if (!db.saveAiReportAssessment(reportId, "REVIEW", "AI phát hiện dấu hiệu vi phạm nhưng không thể gỡ nội dung tự động; cần Quản trị viên kiểm tra.")) {
+                    sendJsonError(res, 500, "Báo cáo đã lưu nhưng không thể lưu kết quả AI; báo cáo vẫn chờ Quản trị viên xử lý.");
+                    return;
+                }
+                res.set_content(json({
+                    {"status", "ok"},
+                    {"message", "AI phát hiện dấu hiệu vi phạm nhưng không thể gỡ nội dung tự động. Báo cáo đã được chuyển cho Quản trị viên."},
+                    {"report_id", reportId},
+                    {"ai_action", "REVIEW"}
+                }).dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            if (!db.saveAiReportAssessment(reportId, "ALLOW", mod.reason)) {
+                sendJsonError(res, 500, "Báo cáo đã lưu nhưng không thể lưu kết quả AI; báo cáo vẫn chờ Quản trị viên xử lý.");
+                return;
+            }
+            res.set_content(json({
+                {"status", "ok"},
+                {"message", "AI chưa xác nhận nội dung vi phạm; báo cáo vẫn được chuyển cho Quản trị viên xem xét."},
+                {"report_id", reportId},
+                {"ai_action", "ALLOW"}
+            }).dump(), "application/json; charset=utf-8");
         } catch (const std::exception& e) {
             res.status = 400;
             res.set_content(json({{"status", "error"}, {"message", "Dữ liệu yêu cầu không hợp lệ hoặc đã xảy ra lỗi."}}).dump(), "application/json; charset=utf-8");
@@ -2976,6 +3025,8 @@ int main() {
                 sendJsonError(res, 400, "Nhập tiêu đề, nội dung hoặc thêm ảnh/video.");
                 return;
             }
+            const auto mod = GeminiService::instance().analyzePost(title, content);
+            if (rejectModeratedContent(db, authorId, "GROUP_POST", mod, res)) return;
             std::string postId, status;
             if (db.createCommunityGroupPost(groupId, authorId, title, content, mediaType, mediaUrl, postId, status)) {
                 res.set_content(json({{"status", "ok"}, {"post_id", postId}, {"approval_status", status},
@@ -3038,6 +3089,8 @@ int main() {
                 sendJsonError(res, 400, "Nhập tiêu đề hoặc nội dung bài viết.");
                 return;
             }
+            const auto mod = GeminiService::instance().analyzePost(title, content);
+            if (rejectModeratedContent(db, userId, "GROUP_POST_EDIT", mod, res)) return;
             if (!db.editCommunityGroupPost(postId, userId, title, content)) {
                 sendJsonError(res, 403, "Bạn không có quyền sửa bài viết này hoặc bài viết không còn tồn tại.");
                 return;
@@ -3118,6 +3171,8 @@ int main() {
                 if (!content.empty()) content += "\n";
                 content += marker + mediaUrl;
             }
+            const auto mod = GeminiService::instance().analyzeComment(content);
+            if (rejectModeratedContent(db, authorId, "GROUP_COMMENT", mod, res)) return;
             json out;
             if (db.commentCommunityGroupPost(postId, authorId, content, out)) {
                 res.set_content(json({{"status", "ok"}, {"comment", out}}).dump(), "application/json; charset=utf-8");
@@ -3137,6 +3192,8 @@ int main() {
             std::string postId = body.value("post_id", "");
             std::string userId = body.value("user_id", "");
             std::string thoughts = body.value("thoughts", "");
+            const auto mod = GeminiService::instance().analyzePost("", thoughts);
+            if (rejectModeratedContent(db, userId, "GROUP_REPOST", mod, res)) return;
             std::string outId;
             if (db.shareCommunityGroupPostToFeed(postId, userId, thoughts, outId)) {
                 res.set_content(json({{"status", "ok"}, {"post_id", outId}, {"message", "Đã chia sẻ ra Bảng tin!"}}).dump(), "application/json; charset=utf-8");
