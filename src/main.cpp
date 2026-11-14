@@ -3157,7 +3157,7 @@ int main() {
                 sendJsonError(res, 400, "Nội dung bài viết không được vượt quá 1.500 ký tự.");
                 return;
             }
-            if (postId.empty() || userId.empty() || (title.empty() && content.empty())) {
+             if (postId.empty() || userId.empty() || (title.empty() && content.empty())) {
                 sendJsonError(res, 400, "Nhập tiêu đề hoặc nội dung bài viết.");
                 return;
             }

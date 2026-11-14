@@ -1960,6 +1960,7 @@ public:
 
     void populatePostExtras(Post& p, const std::string& currentUserId) {
         // 1. Tính toán Top Reactions và danh sách tên người thả (Hình 1)
+        p.total_reactions = 0;
         const char* rSql = R"(
             SELECT r.type, u.fullname
             FROM reactions r
