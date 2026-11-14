@@ -5700,25 +5700,35 @@ public:
         return ok;
     }
 
-    json getCommunityGroupFeed(const std::string& userId, const std::string& groupId = "", int limit = 20) {
+    json getCommunityGroupFeed(const std::string& userId, const std::string& groupId = "", int limit = 20, int offset = 0) {
         std::lock_guard<std::mutex> lock(dbMutex);
         json arr = json::array();
         std::string sql;
         if (groupId.empty()) {
             sql = R"(
                 SELECT p.id, p.group_id, g.name, p.author_id, u.fullname, u.avatar, p.content,
-                       p.media_type, p.media_url, p.approval_status, p.created_at, u.user_token
+                       p.media_type, p.media_url, p.approval_status, p.created_at, u.user_token,
+                       (SELECT COUNT(*) FROM community_group_post_reactions r WHERE r.post_id = p.id) AS react_cnt,
+                       (SELECT COUNT(*) FROM community_group_post_comments c WHERE c.post_id = p.id) AS cmt_cnt,
+                       (SELECT type FROM community_group_post_reactions r WHERE r.post_id = p.id AND r.user_id = ? LIMIT 1) AS my_reaction
                 FROM community_group_posts p
                 JOIN community_groups g ON g.id = p.group_id
                 JOIN users u ON u.id = p.author_id
                 JOIN community_group_members m ON m.group_id = p.group_id AND m.user_id = ?
                 WHERE p.approval_status = 'APPROVED'
-                ORDER BY p.created_at DESC LIMIT ?;
+                ORDER BY (
+                    0.65 * MIN(1.0, (react_cnt + 2.0 * cmt_cnt) / 20.0)
+                    + 0.35 / (1.0 + MAX(0.0, (julianday('now') - julianday(p.created_at)) * 24.0) / 36.0)
+                ) DESC, p.created_at DESC
+                LIMIT ? OFFSET ?;
             )";
         } else {
             sql = R"(
                 SELECT p.id, p.group_id, g.name, p.author_id, u.fullname, u.avatar, p.content,
-                       p.media_type, p.media_url, p.approval_status, p.created_at, u.user_token
+                       p.media_type, p.media_url, p.approval_status, p.created_at, u.user_token,
+                       (SELECT COUNT(*) FROM community_group_post_reactions r WHERE r.post_id = p.id) AS react_cnt,
+                       (SELECT COUNT(*) FROM community_group_post_comments c WHERE c.post_id = p.id) AS cmt_cnt,
+                       (SELECT type FROM community_group_post_reactions r WHERE r.post_id = p.id AND r.user_id = ? LIMIT 1) AS my_reaction
                 FROM community_group_posts p
                 JOIN community_groups g ON g.id = p.group_id
                 JOIN users u ON u.id = p.author_id
@@ -5730,47 +5740,34 @@ public:
                     ))
                     OR p.author_id = ?
                   )
-                ORDER BY p.created_at DESC LIMIT ?;
+                ORDER BY (
+                    0.65 * MIN(1.0, (react_cnt + 2.0 * cmt_cnt) / 20.0)
+                    + 0.35 / (1.0 + MAX(0.0, (julianday('now') - julianday(p.created_at)) * 24.0) / 36.0)
+                ) DESC, p.created_at DESC
+                LIMIT ? OFFSET ?;
             )";
         }
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) return arr;
         if (groupId.empty()) {
             sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 2, limit);
-        } else {
-            sqlite3_bind_text(stmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
             sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 3, limit);
+            sqlite3_bind_int(stmt, 4, offset);
+        } else {
+            sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, groupId.c_str(), -1, SQLITE_STATIC);
             sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 4, limit);
+            sqlite3_bind_text(stmt, 4, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 5, limit);
+            sqlite3_bind_int(stmt, 6, offset);
         }
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             std::string pid = (const char*)sqlite3_column_text(stmt, 0);
-            int reactCnt = 0, cmtCnt = 0;
-            {
-                sqlite3_stmt* rStmt = nullptr;
-                if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM community_group_post_reactions WHERE post_id = ?;", -1, &rStmt, nullptr) == SQLITE_OK) {
-                    sqlite3_bind_text(rStmt, 1, pid.c_str(), -1, SQLITE_STATIC);
-                    if (sqlite3_step(rStmt) == SQLITE_ROW) reactCnt = sqlite3_column_int(rStmt, 0);
-                    sqlite3_finalize(rStmt);
-                }
-                if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM community_group_post_comments WHERE post_id = ?;", -1, &rStmt, nullptr) == SQLITE_OK) {
-                    sqlite3_bind_text(rStmt, 1, pid.c_str(), -1, SQLITE_STATIC);
-                    if (sqlite3_step(rStmt) == SQLITE_ROW) cmtCnt = sqlite3_column_int(rStmt, 0);
-                    sqlite3_finalize(rStmt);
-                }
-            }
-            std::string myReact;
-            {
-                sqlite3_stmt* mStmt = nullptr;
-                if (sqlite3_prepare_v2(db, "SELECT type FROM community_group_post_reactions WHERE post_id = ? AND user_id = ? LIMIT 1;", -1, &mStmt, nullptr) == SQLITE_OK) {
-                    sqlite3_bind_text(mStmt, 1, pid.c_str(), -1, SQLITE_STATIC);
-                    sqlite3_bind_text(mStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
-                    if (sqlite3_step(mStmt) == SQLITE_ROW && sqlite3_column_text(mStmt, 0))
-                        myReact = (const char*)sqlite3_column_text(mStmt, 0);
-                    sqlite3_finalize(mStmt);
-                }
-            }
+            const int reactCnt = sqlite3_column_int(stmt, 12);
+            const int cmtCnt = sqlite3_column_int(stmt, 13);
+            const std::string myReact = sqlite3_column_text(stmt, 14)
+                ? (const char*)sqlite3_column_text(stmt, 14) : "";
             arr.push_back({
                 {"id", pid},
                 {"group_id", (const char*)sqlite3_column_text(stmt, 1)},

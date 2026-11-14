@@ -8411,8 +8411,9 @@ class AppClient {
     document.getElementById('registerStep2Container').style.display = 'none';
   }
 
-  ensureLegalTermsAccepted() {
-    const checkbox = document.getElementById('acceptLegalTerms');
+  ensureLegalTermsAccepted(flow = 'login') {
+    const checkboxId = flow === 'register' ? 'acceptRegisterLegalTerms' : 'acceptLoginLegalTerms';
+    const checkbox = document.getElementById(checkboxId);
     if (checkbox && checkbox.checked) return true;
     this.showToast('Vui lòng đồng ý với Điều khoản sử dụng và Chính sách quyền riêng tư để tiếp tục.', 'error');
     checkbox?.focus();
@@ -8452,7 +8453,7 @@ class AppClient {
   }
 
   async handleRegisterStep1() {
-    if (!this.ensureLegalTermsAccepted()) return;
+    if (!this.ensureLegalTermsAccepted('register')) return;
     const fn = document.getElementById('regFullname').value.trim();
     const un = document.getElementById('regUsername').value.trim();
     const em = document.getElementById('regEmail').value.trim();
@@ -8528,7 +8529,7 @@ class AppClient {
   }
 
   async handleVerifyOtpAndRegister() {
-    if (!this.ensureLegalTermsAccepted()) return;
+    if (!this.ensureLegalTermsAccepted('register')) return;
     const b1 = document.getElementById('otp1').value;
     const b2 = document.getElementById('otp2').value;
     const b3 = document.getElementById('otp3').value;

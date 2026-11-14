@@ -2950,7 +2950,8 @@ int main() {
         std::string userId = req.get_param_value("user_id");
         std::string groupId = req.get_param_value("group_id");
         int limit = paramInt(req, "limit", 20, 1, 100);
-        res.set_content(json({{"status", "ok"}, {"posts", db.getCommunityGroupFeed(userId, groupId, limit)}}).dump(), "application/json; charset=utf-8");
+        int offset = paramInt(req, "offset", 0, 0, 1000000);
+        res.set_content(json({{"status", "ok"}, {"posts", db.getCommunityGroupFeed(userId, groupId, limit, offset)}}).dump(), "application/json; charset=utf-8");
     });
 
     R.Post("/api/community-groups/posts", [&db](const httplib::Request& req, httplib::Response& res) {

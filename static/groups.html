@@ -8,16 +8,31 @@
   <link rel="icon" href="img/default-avatar.svg" type="image/svg+xml">
   <style>
     .groups-layout { display:flex; gap:16px; max-width:1100px; margin:0 auto; padding:16px; }
-    .groups-left { width:280px; flex-shrink:0; }
+    .groups-left { width:280px; flex-shrink:0; position:sticky; top:76px; align-self:flex-start; max-height:calc(100vh - 92px); overflow-y:auto; scrollbar-width:thin; }
     .groups-right { flex:1; min-width:0; }
     .groups-nav { background:var(--card-bg,#fff); border-radius:12px; padding:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
     .groups-nav button, .groups-nav a {
       display:flex; align-items:center; gap:10px; width:100%; text-align:left;
       padding:10px 12px; border:none; background:transparent; border-radius:8px;
-      cursor:pointer; font-size:.92rem; color:var(--text-primary); text-decoration:none;
+      cursor:pointer; font-size:.92rem; color:var(--text-main); text-decoration:none;
+      min-height:42px; box-sizing:border-box; transition:background-color .15s ease,color .15s ease;
     }
     .groups-nav button:hover, .groups-nav a:hover, .groups-nav button.active { background:rgba(0,132,255,.1); color:#0084ff; }
     .groups-nav .create-btn { background:#e7f3ff; color:#0084ff; font-weight:600; margin-top:8px; }
+    .groups-nav .create-btn:hover { background:#d8ebff; }
+    .group-open-btn {
+      flex:0 0 auto; border:0; border-radius:8px; padding:9px 14px;
+      background:var(--primary); color:#fff; font:inherit; font-weight:600;
+      cursor:pointer; white-space:nowrap; transition:background-color .15s ease,box-shadow .15s ease;
+    }
+    .group-open-btn:hover { background:#5420b5; box-shadow:0 3px 10px rgba(84,32,181,.2); }
+    .groups-load-more {
+      display:block; width:100%; margin:12px 0; padding:11px;
+      border:1px solid var(--border-color); border-radius:9px;
+      background:var(--bg-surface); color:var(--primary); font:inherit; font-weight:600;
+      cursor:pointer;
+    }
+    .groups-load-more:disabled { opacity:.7; cursor:wait; }
     .groups-section-title { font-size:.78rem; color:var(--text-muted); margin:14px 8px 6px; font-weight:600; text-transform:uppercase; }
     .group-list-item { display:flex; gap:10px; align-items:center; padding:8px; border-radius:8px; cursor:pointer; }
     .group-list-item:hover { background:rgba(0,0,0,.04); }
@@ -40,12 +55,30 @@
     .create-group-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
     .composer-box { background:var(--card-bg,#fff); border-radius:12px; padding:12px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
     .composer-box textarea { width:100%; min-height:70px; border:1px solid var(--border,#ddd); border-radius:8px; padding:8px; box-sizing:border-box; resize:vertical; }
+    @media (max-width:760px) {
+      .groups-layout { flex-direction:column; padding:12px; }
+      .groups-left { position:static; width:100%; max-height:none; overflow:visible; }
+    }
   </style>
 </head>
 <body>
   <header class="navbar">
     <div class="nav-left">
       <a href="index.html" class="logo-container">
+        <div class="logo-icon logo-svg-box" aria-hidden="true">
+          <svg width="34" height="34" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M14 20C14 11.1634 21.1634 4 30 4H70C78.8366 4 86 11.1634 86 20V62C86 70.8366 78.8366 78 70 78H36L14 94L20 78H30C21.1634 78 14 70.8366 14 62V20Z" fill="#6c2bd9"/>
+            <line x1="50" y1="28" x2="30" y2="58" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="30" y1="58" x2="70" y2="58" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="70" y1="58" x2="50" y2="28" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="50" cy="28" r="10" fill="#f59e0b"/>
+            <circle cx="50" cy="28" r="4.5" fill="white"/>
+            <circle cx="30" cy="58" r="10" fill="#ec4899"/>
+            <circle cx="30" cy="58" r="4.5" fill="white"/>
+            <circle cx="70" cy="58" r="10" fill="#10b981"/>
+            <circle cx="70" cy="58" r="4.5" fill="white"/>
+          </svg>
+        </div>
         <span>Mạng Xã Hội Mini</span>
       </a>
     </div>
@@ -111,12 +144,20 @@
     </div>
   </div>
 
-  <script src="js/app.js?v=20261114-authfix1"></script>
+  <script src="js/app.js?v=20261115-auth-groups2"></script>
   <script>
     const groupsPage = {
       currentView: 'feed',
       currentGroupId: null,
       myGroups: [],
+      feedLimit: 10,
+      feedPageSize: 5,
+      feedOffset: 0,
+      feedHasMore: false,
+      feedLoading: false,
+      feedRequestId: 0,
+      feedObserver: null,
+      seenPostIds: new Set(),
 
       async init() {
         if (!app.currentUser) {
@@ -126,7 +167,8 @@
         await this.loadJoined();
         const params = new URLSearchParams(window.location.search);
         const view = (params.get('view') || 'feed').toLowerCase();
-        if (view === 'mine' || view === 'manage') this.showMine();
+        if (view === 'mine') this.showMine();
+        else if (view === 'manage') this.showManage();
         else if (view === 'discover') this.showDiscover();
         else if (view === 'create') { this.showFeed(); this.openCreateModal(); }
         else if (view === 'search') this.showSearch();
@@ -135,9 +177,30 @@
       },
 
       setActiveNav(id) {
+        this.stopFeedPagination();
         document.querySelectorAll('.groups-nav button').forEach(b => b.classList.remove('active'));
         const el = document.getElementById(id);
         if (el) el.classList.add('active');
+      },
+
+      stopFeedPagination() {
+        this.feedRequestId++;
+        if (this.feedObserver) {
+          this.feedObserver.disconnect();
+          this.feedObserver = null;
+        }
+        this.feedLoading = false;
+      },
+
+      observeFeedSentinel() {
+        if (!this.feedHasMore || !('IntersectionObserver' in window)) return;
+        const sentinel = document.getElementById('groupsLoadMoreSentinel');
+        if (!sentinel) return;
+        if (this.feedObserver) this.feedObserver.disconnect();
+        this.feedObserver = new IntersectionObserver(entries => {
+          if (entries.some(entry => entry.isIntersecting)) this.loadMorePosts();
+        }, { rootMargin: '0px 0px 120px 0px' });
+        this.feedObserver.observe(sentinel);
       },
 
       async showSearch() {
@@ -154,12 +217,18 @@
               oninput="groupsPage.filterDiscover(this.value)">
           </div>
           <div id="groupSearchResults"><div style="padding:12px;color:var(--text-muted);">Đang tải danh sách nhóm...</div></div>`;
-        await this.showDiscover();
+        const requestId = this.feedRequestId;
         const results = document.getElementById('groupSearchResults');
-        const content = document.getElementById('groupsContent');
-        // showDiscover writes to groupsContent; move results into search results box
-        if (results && content) {
-          results.innerHTML = content.querySelector('.group-feed-card') ? content.innerHTML : (content.innerHTML || '');
+        try {
+          const res = await fetch(`/api/community-groups/discover?user_id=${encodeURIComponent(app.currentUser.id)}`);
+          const data = await res.json();
+          if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Không thể tìm kiếm nhóm.');
+          if (requestId === this.feedRequestId) this.renderDiscoverGroups(data.groups || [], results);
+        } catch (error) {
+          if (requestId !== this.feedRequestId) return;
+          console.error('Không thể tải nhóm để tìm kiếm:', error);
+          results.innerHTML = '<div style="padding:12px;color:var(--accent-red);">Không thể tải danh sách nhóm.</div>';
+          app.showToast('Không thể tải danh sách nhóm.', 'error');
         }
       },
 
@@ -186,9 +255,7 @@
       },
 
       async showManage() {
-        this.setActiveNav('navManage');
-        await this.showMine();
-        document.getElementById('groupsMainTitle').textContent = 'Quản lý nhóm đã tham gia';
+        await this.showMine('navManage', 'Quản lý nhóm đã tham gia');
       },
 
       async loadJoined() {
@@ -215,26 +282,55 @@
         this.currentView = 'feed';
         this.currentGroupId = null;
         this.setActiveNav('navFeed');
+        this.feedOffset = 0;
+        this.feedHasMore = true;
+        this.seenPostIds = new Set();
+        const requestId = this.feedRequestId;
         document.getElementById('groupsMainTitle').textContent = 'Hoạt động mới đây';
         document.getElementById('groupComposer').style.display = 'none';
         const box = document.getElementById('groupsContent');
         box.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Đang tải...</div>';
-        const res = await fetch(`/api/community-groups/feed?user_id=${encodeURIComponent(app.currentUser.id)}&limit=30`);
-        const data = await res.json();
-        this.renderPosts(data.posts || []);
+        try {
+          const res = await fetch(`/api/community-groups/feed?user_id=${encodeURIComponent(app.currentUser.id)}&limit=${this.feedLimit}&offset=0`);
+          const data = await res.json();
+          if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Yêu cầu tải bảng tin bị từ chối.');
+          if (requestId !== this.feedRequestId) return;
+          const posts = Array.isArray(data.posts) ? data.posts : [];
+          this.feedOffset = posts.length;
+          this.feedHasMore = posts.length === this.feedLimit;
+          this.renderPosts(posts);
+        } catch (error) {
+          if (requestId !== this.feedRequestId) return;
+          console.error('Không thể tải bảng tin nhóm:', error);
+          box.innerHTML = '<div style="padding:20px;color:var(--accent-red);">Không thể tải bảng tin nhóm.</div>';
+          app.showToast('Không thể tải bảng tin nhóm.', 'error');
+        }
       },
 
       async showDiscover() {
         this.currentView = 'discover';
         this.currentGroupId = null;
         this.setActiveNav('navDiscover');
+        const requestId = this.feedRequestId;
         document.getElementById('groupsMainTitle').textContent = 'Khám phá nhóm';
         document.getElementById('groupComposer').style.display = 'none';
         const box = document.getElementById('groupsContent');
         box.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Đang tải...</div>';
-        const res = await fetch(`/api/community-groups/discover?user_id=${encodeURIComponent(app.currentUser.id)}`);
-        const data = await res.json();
-        const groups = data.groups || [];
+        try {
+          const res = await fetch(`/api/community-groups/discover?user_id=${encodeURIComponent(app.currentUser.id)}`);
+          const data = await res.json();
+          if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Không thể tải nhóm khám phá.');
+          if (requestId !== this.feedRequestId) return;
+          this.renderDiscoverGroups(data.groups || [], box);
+        } catch (error) {
+          if (requestId !== this.feedRequestId) return;
+          console.error('Không thể tải nhóm khám phá:', error);
+          box.innerHTML = '<div style="padding:20px;color:var(--accent-red);">Không thể tải danh sách nhóm.</div>';
+          app.showToast('Không thể tải danh sách nhóm.', 'error');
+        }
+      },
+
+      renderDiscoverGroups(groups, box) {
         if (!groups.length) {
           box.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Chưa có nhóm công khai nào. Hãy tạo nhóm mới!</div>';
           return;
@@ -254,10 +350,14 @@
         `).join('');
       },
 
-      async showMine() {
-        this.setActiveNav('navMine');
+      async showMine(navId = 'navMine', title = 'Nhóm của bạn') {
+        this.currentView = navId === 'navManage' ? 'manage' : 'mine';
+        this.currentGroupId = null;
+        this.setActiveNav(navId);
+        const requestId = this.feedRequestId;
         await this.loadJoined();
-        document.getElementById('groupsMainTitle').textContent = 'Nhóm của bạn';
+        if (requestId !== this.feedRequestId) return;
+        document.getElementById('groupsMainTitle').textContent = title;
         document.getElementById('groupComposer').style.display = 'none';
         const box = document.getElementById('groupsContent');
         if (!this.myGroups.length) {
@@ -271,42 +371,60 @@
               <div style="font-weight:700;">${app.escapeHtml(g.name)} ${g.role === 'ADMIN' ? '<span class="pending-badge">Admin</span>' : ''}</div>
               <div style="font-size:.82rem;color:var(--text-muted);">${g.member_count || 0} thành viên</div>
             </div>
-            <button onclick="groupsPage.openGroup('${g.id}')">Mở nhóm</button>
+            <button class="group-open-btn" onclick="groupsPage.openGroup('${g.id}')">Mở nhóm</button>
           </div>
         `).join('');
       },
 
       async openGroup(groupId) {
+        this.stopFeedPagination();
         this.currentView = 'group';
         this.currentGroupId = groupId;
+        this.feedOffset = 0;
+        this.feedHasMore = true;
+        this.seenPostIds = new Set();
+        const requestId = this.feedRequestId;
         document.querySelectorAll('.groups-nav button').forEach(b => b.classList.remove('active'));
         const g = this.myGroups.find(x => x.id === groupId);
         document.getElementById('groupsMainTitle').textContent = g ? g.name : 'Nhóm';
         document.getElementById('groupComposer').style.display = 'block';
         const box = document.getElementById('groupsContent');
         box.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Đang tải...</div>';
-        // pending for admin
         let pendingHtml = '';
-        if (g && g.role === 'ADMIN') {
-          const pr = await fetch(`/api/community-groups/posts/pending?group_id=${encodeURIComponent(groupId)}&admin_id=${encodeURIComponent(app.currentUser.id)}`);
-          const pd = await pr.json();
-          const pending = pd.posts || [];
-          if (pending.length) {
-            pendingHtml = `<div class="group-feed-card" style="border:1px solid #fbbf24;"><strong>Bài chờ duyệt (${pending.length})</strong>` +
-              pending.map(p => `
-                <div style="margin-top:10px;padding-top:10px;border-top:1px solid #eee;">
-                  <div style="font-size:.85rem;"><strong>${app.escapeHtml(p.author_name)}</strong>: ${app.escapeHtml(p.content)}</div>
-                  <div style="margin-top:6px;display:flex;gap:8px;">
-                    <button class="btn-primary" onclick="groupsPage.approvePost('${p.id}', true)">Duyệt</button>
-                    <button onclick="groupsPage.approvePost('${p.id}', false)">Từ chối</button>
+        try {
+          if (g && g.role === 'ADMIN') {
+            const pr = await fetch(`/api/community-groups/posts/pending?group_id=${encodeURIComponent(groupId)}&admin_id=${encodeURIComponent(app.currentUser.id)}`);
+            const pd = await pr.json();
+            if (!pr.ok || pd.status !== 'ok') throw new Error(pd.message || 'Không thể tải bài viết chờ duyệt.');
+            if (requestId !== this.feedRequestId) return;
+            const pending = pd.posts || [];
+            if (pending.length) {
+              pendingHtml = `<div class="group-feed-card" style="border:1px solid #fbbf24;"><strong>Bài chờ duyệt (${pending.length})</strong>` +
+                pending.map(p => `
+                  <div style="margin-top:10px;padding-top:10px;border-top:1px solid #eee;">
+                    <div style="font-size:.85rem;"><strong>${app.escapeHtml(p.author_name)}</strong>: ${app.escapeHtml(p.content)}</div>
+                    <div style="margin-top:6px;display:flex;gap:8px;">
+                      <button class="btn-primary" onclick="groupsPage.approvePost('${p.id}', true)">Duyệt</button>
+                      <button onclick="groupsPage.approvePost('${p.id}', false)">Từ chối</button>
+                    </div>
                   </div>
-                </div>
-              `).join('') + '</div>';
+                `).join('') + '</div>';
+            }
           }
+          const res = await fetch(`/api/community-groups/feed?user_id=${encodeURIComponent(app.currentUser.id)}&group_id=${encodeURIComponent(groupId)}&limit=${this.feedLimit}&offset=0`);
+          const data = await res.json();
+          if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Yêu cầu tải bài viết nhóm bị từ chối.');
+          if (requestId !== this.feedRequestId) return;
+          const posts = Array.isArray(data.posts) ? data.posts : [];
+          this.feedOffset = posts.length;
+          this.feedHasMore = posts.length === this.feedLimit;
+          this.renderPosts(posts, pendingHtml);
+        } catch (error) {
+          if (requestId !== this.feedRequestId) return;
+          console.error('Không thể tải bài viết nhóm:', error);
+          box.innerHTML = pendingHtml + '<div style="padding:20px;color:var(--accent-red);">Không thể tải bài viết nhóm.</div>';
+          app.showToast('Không thể tải bài viết nhóm.', 'error');
         }
-        const res = await fetch(`/api/community-groups/feed?user_id=${encodeURIComponent(app.currentUser.id)}&group_id=${encodeURIComponent(groupId)}&limit=40`);
-        const data = await res.json();
-        this.renderPosts(data.posts || [], pendingHtml);
       },
 
       media: { type: 'NONE', url: '' },
@@ -343,14 +461,15 @@
         const vid = document.getElementById('groupVideoFile'); if (vid) vid.value = '';
       },
 
-      renderPosts(posts, extraHtml = '') {
+      renderPosts(posts, extraHtml = '', append = false) {
         const box = document.getElementById('groupsContent');
-        if (!posts.length && !extraHtml) {
+        if (!append && !posts.length && !extraHtml) {
           box.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Chưa có bài viết nào.</div>';
           return;
         }
         const reactIcon = (t) => ({LIKE:'👍',LOVE:'❤️',HAHA:'😆',WOW:'😮',SAD:'😢',ANGRY:'😡'}[t] || '👍');
-        box.innerHTML = extraHtml + posts.map(p => {
+        const postsHtml = posts.map(p => {
+          this.seenPostIds.add(p.id);
           const approved = p.approval_status === 'APPROVED';
           const media = p.media_type === 'IMAGE' && p.media_url
             ? `<img src="${app.escapeHtml(p.media_url)}" style="max-width:100%;border-radius:10px;margin-top:8px;">`
@@ -380,6 +499,61 @@
             ${actions}
           </div>`;
         }).join('');
+        document.getElementById('groupsLoadMoreSentinel')?.remove();
+        if (append) box.insertAdjacentHTML('beforeend', postsHtml);
+        else box.innerHTML = extraHtml + postsHtml;
+        if (this.feedHasMore) {
+          box.insertAdjacentHTML('beforeend', '<button type="button" class="groups-load-more" id="groupsLoadMoreSentinel" onclick="groupsPage.loadMorePosts()">Xem thêm bài viết</button>');
+          if (!this.feedLoading) this.observeFeedSentinel();
+        }
+      },
+
+      async loadMorePosts() {
+        if (this.feedLoading || !this.feedHasMore || (this.currentView !== 'feed' && this.currentView !== 'group')) return;
+        this.feedLoading = true;
+        let shouldObserveAgain = true;
+        const requestId = this.feedRequestId;
+        const groupId = this.currentGroupId || '';
+        const sentinel = document.getElementById('groupsLoadMoreSentinel');
+        if (sentinel) {
+          sentinel.disabled = true;
+          sentinel.textContent = 'Đang tải thêm bài viết...';
+        }
+        try {
+          const params = new URLSearchParams({
+            user_id: app.currentUser.id,
+            limit: String(this.feedPageSize),
+            offset: String(this.feedOffset)
+          });
+          if (groupId) params.set('group_id', groupId);
+          const res = await fetch(`/api/community-groups/feed?${params}`);
+          const data = await res.json();
+          if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Yêu cầu tải thêm bài viết bị từ chối.');
+          if (requestId !== this.feedRequestId) return;
+          const posts = Array.isArray(data.posts) ? data.posts : [];
+          this.feedOffset += posts.length;
+          this.feedHasMore = posts.length === this.feedPageSize;
+          this.renderPosts(posts.filter(post => !this.seenPostIds.has(post.id)), '', true);
+        } catch (error) {
+          if (requestId !== this.feedRequestId) return;
+          console.error('Không thể tải thêm bài viết nhóm:', error);
+          const retryButton = document.getElementById('groupsLoadMoreSentinel');
+          if (retryButton) {
+            retryButton.disabled = false;
+            retryButton.textContent = 'Thử tải lại';
+          }
+          if (this.feedObserver) {
+            this.feedObserver.disconnect();
+            this.feedObserver = null;
+          }
+          shouldObserveAgain = false;
+          app.showToast('Không thể tải thêm bài viết nhóm.', 'error');
+        } finally {
+          if (requestId === this.feedRequestId) {
+            this.feedLoading = false;
+            if (shouldObserveAgain) this.observeFeedSentinel();
+          }
+        }
       },
 
       async react(postId, type) {

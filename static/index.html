@@ -125,7 +125,7 @@
           <span class="nav-label">Bảng tin chính</span>
         </a>
 
-        <div class="sidebar-nav-group open" id="navGroupFriends" data-group="friends">
+        <div class="sidebar-nav-group" id="navGroupFriends" data-group="friends">
           <a href="friends.html" class="sidebar-nav-item" data-nav="friends"
              onclick="event.preventDefault(); app.toggleSidebarGroup('friends');">
             <span class="nav-icon">👥</span>
@@ -434,14 +434,6 @@
         <button class="auth-tab" id="tabRegisterBtn" onclick="app.switchAuthTab('register')">Đăng Ký</button>
       </div>
 
-      <label class="auth-legal-consent">
-        <input type="checkbox" id="acceptLegalTerms">
-        <span>Tôi đã đọc và đồng ý với
-          <a href="terms.html" target="_blank" rel="noopener noreferrer">Điều khoản sử dụng</a> và
-          <a href="privacy.html" target="_blank" rel="noopener noreferrer">Chính sách quyền riêng tư</a>.
-        </span>
-      </label>
-
       <!-- FORM ĐĂNG NHẬP: BẮT NGƯỜI DÙNG TỰ NHẬP, KHÔNG ĐIỀN TRƯỚC -->
       <div id="loginFormContainer">
         <div class="form-group">
@@ -467,6 +459,13 @@
           </svg>
           Đăng nhập bằng tài khoản Google
         </button>
+        <label class="auth-legal-consent">
+          <input type="checkbox" id="acceptLoginLegalTerms">
+          <span>Tôi đã đọc và đồng ý với
+            <a href="terms.html" target="_blank" rel="noopener noreferrer">Điều khoản sử dụng</a> và
+            <a href="privacy.html" target="_blank" rel="noopener noreferrer">Chính sách quyền riêng tư</a>.
+          </span>
+        </label>
       </div>
 
       <!-- FORM ĐĂNG KÝ: CÓ XÁC NHẬN MẬT KHẨU -->
@@ -492,6 +491,13 @@
           <label>Xác nhận mật khẩu</label>
           <input type="password" id="regConfirmPassword" placeholder="Nhập lại mật khẩu ở trên">
         </div>
+        <label class="auth-legal-consent">
+          <input type="checkbox" id="acceptRegisterLegalTerms">
+          <span>Tôi đã đọc và đồng ý với
+            <a href="terms.html" target="_blank" rel="noopener noreferrer">Điều khoản sử dụng</a> và
+            <a href="privacy.html" target="_blank" rel="noopener noreferrer">Chính sách quyền riêng tư</a>.
+          </span>
+        </label>
         <button type="button" class="btn-primary btn-full" onclick="app.handleRegisterStep1()">
           📩 Nhận mã xác thực qua Gmail
         </button>
@@ -1020,6 +1026,6 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261114-authfix1"></script>
+  <script src="js/app.js?v=20261115-auth-groups2"></script>
 </body>
 </html>
