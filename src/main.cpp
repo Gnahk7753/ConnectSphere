@@ -601,11 +601,12 @@ int main() {
     GeminiService::instance().loadEnv(".env");
 
     Database db;
-    if (!db.init("data/social_network.db")) {
+    const std::string databasePath = sec::envOr("DATABASE_PATH", "data/social_network.db");
+    if (!db.init(databasePath)) {
         std::cerr << "Lỗi: Không thể khởi tạo SQLite Database!" << std::endl;
         return 1;
     }
-    std::cout << "[Database] SQLite Database đã sẵn sàng tại data/social_network.db" << std::endl;
+    std::cout << "[Database] SQLite Database đã sẵn sàng tại " << databasePath << std::endl;
 
     if (db.hasWeakAdminPassword() && sec::envFlag("PRODUCTION")) {
         std::cerr << "[BẢO MẬT] PRODUCTION=1 nhưng admin vẫn dùng mật khẩu mặc định. Đặt ADMIN_PASSWORD trong .env rồi chạy lại." << std::endl;
