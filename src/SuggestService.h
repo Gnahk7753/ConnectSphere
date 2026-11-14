@@ -103,6 +103,7 @@ public:
             if (!db.getUserById(candidateId, candidateProfile)) continue;
             if (candidateProfile.status == "LOCKED") continue;
             if (candidateProfile.role == "ADMIN") continue;
+            if (db.isUserBlocked(myId, candidateId)) continue;
 
             const auto& candFriends = getNeighbors(candidateId);
             int mutualCount = 0;
@@ -141,6 +142,9 @@ public:
             if (filter == "HOMETOWN" && !isSameHometown) continue;
             if (filter == "INTERESTS" && commonInterests <= 0) continue;
             if (filter == "MUTUAL" && mutualCount <= 0 && dist != 2) continue;
+
+            // Chỉ hiển thị người có lý do gợi ý rõ ràng, bỏ lý do chung chung
+            if (reason == "Gợi ý kết bạn") continue;
 
             std::string reqStatus = db.getFriendshipRelation(myId, candidateId);
 

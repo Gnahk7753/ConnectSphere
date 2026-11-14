@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bạn bè - Mạng Xã Hội MIni</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20261110-btnfix1">
   <link rel="icon" href="img/default-avatar.svg" type="image/svg+xml">
 </head>
 <body>
@@ -47,6 +47,7 @@
 
       <!-- Nút Quản trị Admin (nếu là Admin) -->
       <a href="admin.html" class="btn-icon" id="adminPanelBtn" title="Trang Quản Trị Viên" style="display: none; text-decoration: none;">🛡️</a>
+      <a href="messenger.html" class="btn-icon" title="Tin nhắn" style="text-decoration: none;">💬</a>
 
       <!-- Thông báo cái chuông (Hình 4) -->
       <div class="nav-dropdown-wrapper">
@@ -77,23 +78,71 @@
   </header>
 
   <!-- ================= MAIN LAYOUT ================= -->
-  <main class="main-wrapper">
+  <main class="main-wrapper friends-main-wrapper">
     <!-- CỘT TRÁI: MENU ĐIỀU HƯỚNG THEO YÊU CẦU CỦA NGƯỜI DÙNG -->
     <aside class="sidebar">
-      <ul class="sidebar-menu">
-        <li><a href="index.html">📰 Bảng tin chính</a></li>
-        <li class="active"><a href="friends.html">👥 Bạn bè</a></li>
-        <li onclick="app.openSupportModal()"><a href="#">🛠️ Hỗ trợ</a></li>
-        <li id="sideAdminItem" style="display: none;"><a href="admin.html">🛡️ Quản trị viên</a></li>
-      </ul>
+            <nav class="sidebar-nav" id="sidebarNav" aria-label="Điều hướng chính">
+        <a href="index.html" class="sidebar-nav-item" data-nav="feed">
+          <span class="nav-icon">📰</span>
+          <span class="nav-label">Bảng tin chính</span>
+        </a>
+
+        <div class="sidebar-nav-group open" id="navGroupFriends" data-group="friends">
+          <a href="friends.html" class="sidebar-nav-item active" data-nav="friends"
+             onclick="event.preventDefault(); app.toggleSidebarGroup('friends');">
+            <span class="nav-icon">👥</span>
+            <span class="nav-label">Bạn bè</span>
+            <span class="nav-badge" id="sideFriendReqBadge" style="display:none;">0</span>
+            <span class="nav-chevron">▼</span>
+          </a>
+          <div class="sidebar-nav-sub">
+            <a href="friends.html?tab=all"><span class="sub-icon">📋</span> Danh sách bạn bè</a>
+            <a href="friends.html?tab=requests"><span class="sub-icon">📩</span> Lời mời kết bạn <span class="sub-badge" id="sideFriendReqSubBadge" style="display:none;">0</span></a>
+            <a href="friends.html?tab=sent"><span class="sub-icon">📤</span> Lời mời đã gửi</a>
+            <a href="friends.html?tab=search"><span class="sub-icon">🔍</span> Tìm kiếm bạn bè</a>
+            <a href="friends.html?tab=suggestions"><span class="sub-icon">✨</span> Gợi ý kết bạn</a>
+          </div>
+        </div>
+
+        <div class="sidebar-nav-group" id="navGroupGroups" data-group="groups">
+          <a href="groups.html" class="sidebar-nav-item" data-nav="groups"
+             onclick="event.preventDefault(); app.toggleSidebarGroup('groups');">
+            <span class="nav-icon">👨‍👩‍👧‍👦</span>
+            <span class="nav-label">Nhóm</span>
+            <span class="nav-chevron">▼</span>
+          </a>
+          <div class="sidebar-nav-sub">
+            <a href="groups.html?view=mine"><span class="sub-icon">🏠</span> Nhóm của tôi</a>
+            <a href="groups.html?view=discover"><span class="sub-icon">🧭</span> Khám phá nhóm</a>
+            <a href="groups.html?view=create"><span class="sub-icon">➕</span> Tạo nhóm mới</a>
+            <a href="groups.html?view=invites"><span class="sub-icon">📨</span> Lời mời tham gia</a>
+            <a href="groups.html?view=manage"><span class="sub-icon">⚙️</span> Quản lý nhóm</a>
+            <a href="groups.html?view=search"><span class="sub-icon">🔎</span> Tìm kiếm nhóm</a>
+          </div>
+        </div>
+
+        <div class="sidebar-nav-group" id="navGroupSupport" data-group="support">
+          <a href="javascript:void(0)" class="sidebar-nav-item" data-nav="support"
+             onclick="app.toggleSidebarGroup('support'); return false;">
+            <span class="nav-icon">🛠️</span>
+            <span class="nav-label">Hỗ trợ</span>
+            <span class="nav-chevron">▼</span>
+          </a>
+          <div class="sidebar-nav-sub">
+            <button type="button" onclick="app.openHelpCenter()"><span class="sub-icon">📚</span> Trung tâm trợ giúp</button>
+            <button type="button" onclick="app.openSupportModal()"><span class="sub-icon">🐛</span> Báo cáo sự cố</button>
+          </div>
+        </div>
+      </nav>
     </aside>
 
     <!-- KHU VỰC TRUNG TÂM: QUẢN LÝ BẠN BÈ VÀ LỜI MỜI -->
-    <section class="feed-container" style="max-width: 900px;">
+    <section class="feed-container">
       <!-- TABS CHÍNH -->
       <div class="auth-tabs" style="margin-bottom: 1.25rem;">
         <button class="auth-tab active" id="tabAllFriendsBtn" onclick="app.switchFriendsPageTab('all')">👥 Tất cả bạn bè (<span id="allFriendsCount">0</span>)</button>
         <button class="auth-tab" id="tabRequestsBtn" onclick="app.switchFriendsPageTab('requests')">📩 Lời mời kết bạn (<span id="reqCountBadge">0</span>)</button>
+        <button class="auth-tab" id="tabSentBtn" onclick="app.switchFriendsPageTab('sent')">📤 Đã gửi (<span id="sentCountBadge">0</span>)</button>
         <button class="auth-tab" id="tabSuggestionsBtn" onclick="app.switchFriendsPageTab('suggestions')">✨ Gợi ý bạn bè</button>
       </div>
 
@@ -115,6 +164,13 @@
         </div>
       </div>
 
+      <!-- TAB: LỜI MỜI ĐÃ GỬI -->
+      <div id="tabContentSent" style="display: none;">
+        <div class="friends-grid" id="sentRequestsGrid">
+          <div style="text-align: center; padding: 2rem; color: var(--text-muted); grid-column: 1 / -1;">Không có lời mời đã gửi.</div>
+        </div>
+      </div>
+
       <!-- TAB 3: GỢI Ý KẾT BẠN CÓ BỘ LỌC VÀ XEM THÊM -->
       <div id="tabContentSuggestions" style="display: none;">
         <div class="suggestion-filter-tabs" id="suggestionFilterTabs">
@@ -125,16 +181,10 @@
           <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('MUTUAL', this)">Bạn của bạn bè</button>
         </div>
 
-        <div class="friends-grid" id="suggestionsGrid">
+        <div class="friends-grid suggestions-card-grid" id="suggestionsGrid">
           <div style="text-align: center; padding: 2rem; color: var(--text-muted); grid-column: 1 / -1;">Đang tải gợi ý kết bạn...</div>
         </div>
 
-        <!-- Nút Xem Thêm gợi ý -->
-        <div style="text-align: center; margin-top: 1.5rem;">
-          <button class="btn-secondary" id="btnLoadMoreSuggestions" onclick="app.loadMoreSuggestions()" style="padding: 0.6rem 1.5rem; font-weight: 600;">
-            ⬇️ Xem thêm gợi ý
-          </button>
-        </div>
       </div>
     </section>
   </main>
@@ -265,7 +315,7 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=20261110-admin2"></script>
   <script>
     window.addEventListener("DOMContentLoaded", () => {
       const urlParams = new URLSearchParams(window.location.search);

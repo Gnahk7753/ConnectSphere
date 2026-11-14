@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mạng Xã Hội MIni</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20261110-btnfix1">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
   <!-- Google Identity Services (Google Sign-In) -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -79,9 +79,9 @@
       </a>
 
       <!-- Nút Tin nhắn -->
-      <button class="btn-icon" id="quickChatBtn" title="Tin nhắn">
+      <a class="btn-icon" id="quickChatBtn" href="messenger.html" title="Tin nhắn" style="text-decoration:none;">
         💬
-      </button>
+      </a>
 
       <!-- Badge người dùng đăng nhập -->
       <div class="user-nav-badge" id="navUserBadge" onclick="app.openMyProfile()">
@@ -118,13 +118,60 @@
         </div>
       </div>
 
-      <!-- Menu bên trái 4 mục: Bảng tin chính, Bạn bè, Hỗ trợ, Quản trị viên -->
-      <ul class="sidebar-menu">
-        <li class="active"><a href="index.html">📰 Bảng tin chính</a></li>
-        <li><a href="friends.html">👥 Bạn bè</a></li>
-        <li onclick="app.openSupportModal()"><a href="#">🛠️ Hỗ trợ</a></li>
-        <li id="sideAdminItem" style="display: none;"><a href="admin.html">🛡️ Quản trị viên</a></li>
-      </ul>
+      <!-- Menu điều hướng phân cấp -->
+            <nav class="sidebar-nav" id="sidebarNav" aria-label="Điều hướng chính">
+        <a href="index.html" class="sidebar-nav-item active" data-nav="feed">
+          <span class="nav-icon">📰</span>
+          <span class="nav-label">Bảng tin chính</span>
+        </a>
+
+        <div class="sidebar-nav-group open" id="navGroupFriends" data-group="friends">
+          <a href="friends.html" class="sidebar-nav-item" data-nav="friends"
+             onclick="event.preventDefault(); app.toggleSidebarGroup('friends');">
+            <span class="nav-icon">👥</span>
+            <span class="nav-label">Bạn bè</span>
+            <span class="nav-badge" id="sideFriendReqBadge" style="display:none;">0</span>
+            <span class="nav-chevron">▼</span>
+          </a>
+          <div class="sidebar-nav-sub">
+            <a href="friends.html?tab=all"><span class="sub-icon">📋</span> Danh sách bạn bè</a>
+            <a href="friends.html?tab=requests"><span class="sub-icon">📩</span> Lời mời kết bạn <span class="sub-badge" id="sideFriendReqSubBadge" style="display:none;">0</span></a>
+            <a href="friends.html?tab=sent"><span class="sub-icon">📤</span> Lời mời đã gửi</a>
+            <a href="friends.html?tab=search"><span class="sub-icon">🔍</span> Tìm kiếm bạn bè</a>
+            <a href="friends.html?tab=suggestions"><span class="sub-icon">✨</span> Gợi ý kết bạn</a>
+          </div>
+        </div>
+
+        <div class="sidebar-nav-group" id="navGroupGroups" data-group="groups">
+          <a href="groups.html" class="sidebar-nav-item" data-nav="groups"
+             onclick="event.preventDefault(); app.toggleSidebarGroup('groups');">
+            <span class="nav-icon">👨‍👩‍👧‍👦</span>
+            <span class="nav-label">Nhóm</span>
+            <span class="nav-chevron">▼</span>
+          </a>
+          <div class="sidebar-nav-sub">
+            <a href="groups.html?view=mine"><span class="sub-icon">🏠</span> Nhóm của tôi</a>
+            <a href="groups.html?view=discover"><span class="sub-icon">🧭</span> Khám phá nhóm</a>
+            <a href="groups.html?view=create"><span class="sub-icon">➕</span> Tạo nhóm mới</a>
+            <a href="groups.html?view=invites"><span class="sub-icon">📨</span> Lời mời tham gia</a>
+            <a href="groups.html?view=manage"><span class="sub-icon">⚙️</span> Quản lý nhóm</a>
+            <a href="groups.html?view=search"><span class="sub-icon">🔎</span> Tìm kiếm nhóm</a>
+          </div>
+        </div>
+
+        <div class="sidebar-nav-group" id="navGroupSupport" data-group="support">
+          <a href="javascript:void(0)" class="sidebar-nav-item" data-nav="support"
+             onclick="app.toggleSidebarGroup('support'); return false;">
+            <span class="nav-icon">🛠️</span>
+            <span class="nav-label">Hỗ trợ</span>
+            <span class="nav-chevron">▼</span>
+          </a>
+          <div class="sidebar-nav-sub">
+            <button type="button" onclick="app.openHelpCenter()"><span class="sub-icon">📚</span> Trung tâm trợ giúp</button>
+            <button type="button" onclick="app.openSupportModal()"><span class="sub-icon">🐛</span> Báo cáo sự cố</button>
+          </div>
+        </div>
+      </nav>
     </aside>
 
     <!-- CỘT GIỮA: BẢNG TIN VÀ ĐĂNG BÀI VIẾT (CÓ ẢNH & VIDEO) -->
@@ -141,7 +188,7 @@
         <!-- Khung xem trước ảnh / video đính kèm -->
         <div class="media-preview-container" id="mediaPreviewContainer">
           <button class="btn-remove-media" onclick="app.clearPostMedia()">✕</button>
-          <img id="postImagePreview" style="display: none;" src="" alt="Preview">
+          <div id="postImagePreview" class="post-image-preview-gallery" style="display: none;"></div>
           <video id="postVideoPreview" style="display: none;" controls src=""></video>
         </div>
 
@@ -150,13 +197,14 @@
             <!-- Nút đính kèm ảnh -->
             <label class="btn-attach" title="Đính kèm hình ảnh">
               📷 Thêm ảnh
-              <input type="file" id="postImageFile" accept="image/*" style="display: none;" onchange="app.handleImageAttachment(this)">
+              <input type="file" id="postImageFile" accept="image/*" multiple style="display: none;" onchange="app.handleImageAttachment(this)">
             </label>
             <!-- Nút đính kèm video -->
             <label class="btn-attach" title="Đính kèm video">
               🎥 Thêm video
               <input type="file" id="postVideoFile" accept="video/*" style="display: none;" onchange="app.handleVideoAttachment(this)">
             </label>
+            <button type="button" class="btn-attach" title="Chèn GIF" onclick="app.openGifPicker('post')">GIF</button>
             <!-- Chọn chế độ hiển thị bài đăng -->
             <select id="postVisibilitySelect" class="post-visibility-select" title="Quyền riêng tư">
               <option value="PUBLIC">🌐 Công khai</option>
@@ -178,47 +226,50 @@
 
     <!-- CỘT PHẢI: GỢI Ý KẾT BẠN & ĐOẠN CHAT (BẠN BÈ & NHÓM) -->
     <aside class="right-sidebar">
-      <!-- Widget Gợi ý bạn bè (Có bộ lọc và nút xem thêm) -->
-      <div class="widget-card">
-        <div class="widget-title">
-          <span>Gợi ý kết bạn</span>
-        </div>
-        <div class="suggestion-filter-tabs" id="suggestionFilterTabs">
-          <button class="suggestion-filter-pill active" onclick="app.filterSuggestionsTab('ALL', this)">Tất cả</button>
-          <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('SCHOOL', this)">Cùng trường</button>
-          <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('HOMETOWN', this)">Cùng quê</button>
-          <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('INTERESTS', this)">Chung sở thích</button>
-          <button class="suggestion-filter-pill" onclick="app.filterSuggestionsTab('MUTUAL', this)">Bạn của bạn bè</button>
-        </div>
-        <div class="suggestion-list" id="suggestionsContainer">
-          <div style="font-size: 0.85rem; color: var(--text-muted);">Đang tìm kiếm người quen...</div>
-        </div>
-        <div style="text-align: center; margin-top: 0.6rem;">
-          <button class="btn-text" id="btnLoadMoreSuggestionsFeed" onclick="app.loadMoreSuggestionsFeed()" style="font-size: 0.8rem; color: var(--primary); font-weight: 600;">
-            ⬇️ Xem thêm gợi ý
-          </button>
-        </div>
-      </div>
-
       <!-- Widget Danh sách Đoạn Chat (Bạn bè & Nhóm chat) -->
-      <div class="widget-card">
+      <div class="widget-card" id="chatListWidget">
         <div class="widget-title">
           <span>Đoạn Chat</span>
-          <button class="btn-create-group-chat" onclick="app.openCreateGroupModal([])" title="Tạo nhóm mới">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-              <circle cx="9" cy="7" r="4"/>
-              <line x1="19" y1="8" x2="19" y2="14"/>
-              <line x1="22" y1="11" x2="16" y2="11"/>
-            </svg>
-            <span>Tạo nhóm</span>
-          </button>
+          <div class="chat-list-header-actions">
+            <div class="chat-list-menu-wrap">
+              <button type="button" class="chat-list-menu-trigger" title="Tùy chọn đoạn chat" onclick="app.toggleChatListMenu(event)">•••</button>
+              <div class="chat-list-menu" id="chatListMenu">
+                  <button type="button" onclick="app.togglePendingMessages()">📨 Tin nhắn đang chờ</button>
+                  <button type="button" onclick="app.toggleArchivedChats()">🗃️ Đoạn chat lưu trữ</button>
+                  <button type="button" onclick="app.toggleBlockedUsers()">🚫 Tài khoản đã bị chặn</button>
+                  <button type="button" onclick="app.showChatHelp()">❔ Trợ giúp</button>
+              </div>
+            </div>
+            <button class="btn-create-group-chat" onclick="app.openCreateGroupModal([])" title="Tạo nhóm mới">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <line x1="19" y1="8" x2="19" y2="14"/>
+                <line x1="22" y1="11" x2="16" y2="11"/>
+              </svg>
+              <span>Tạo nhóm</span>
+            </button>
+          </div>
+        </div>
+        <div class="all-message-search">
+          <label class="all-message-search-input-wrap">
+            <span class="all-message-search-icon" aria-hidden="true"></span>
+            <input id="allMessagesSearchInput" type="search" placeholder="Tìm kiếm trên tin nhắn..." autocomplete="off"
+                   oninput="app.searchAllMessages(this.value)">
+          </label>
+          <div class="all-message-search-filters" id="allMessageSearchFilters">
+            <button type="button" class="active" data-filter="all" onclick="app.setAllMessageSearchFilter('all', this)">Tất cả</button>
+            <button type="button" data-filter="people" onclick="app.setAllMessageSearchFilter('people', this)">Bạn bè</button>
+            <button type="button" data-filter="messages" onclick="app.setAllMessageSearchFilter('messages', this)">Tin nhắn</button>
+            <button type="button" data-filter="groups" onclick="app.setAllMessageSearchFilter('groups', this)">Nhóm</button>
+          </div>
+          <div class="all-message-search-results" id="allMessagesSearchResults"></div>
         </div>
         <div class="chat-filter-pills">
           <button class="chat-filter-pill active" onclick="app.filterContacts('all', this)">Tất cả</button>
           <button class="chat-filter-pill" onclick="app.filterContacts('friends', this)">Bạn bè</button>
           <button class="chat-filter-pill" onclick="app.filterContacts('unread', this)">Chưa đọc</button>
-          <button class="chat-filter-pill" onclick="app.filterContacts('groups', this)">Nhóm Chat</button>
+          <button class="chat-filter-pill" onclick="app.filterContacts('groups', this)">Nhóm</button>
         </div>
         <div class="suggestion-list" id="contactsContainer">
           <!-- Render tự động bởi JS -->
@@ -244,6 +295,7 @@
           <button class="btn-icon" style="width: 28px; height: 28px;" onclick="app.toggleChatMenu()" title="Tùy chọn">•••</button>
           <div class="chat-more-dropdown" id="chatMoreDropdown">
             <button onclick="app.chatActionSearchMessages()">🔍 Tìm kiếm tin nhắn</button>
+            <button onclick="app.chatActionQuickEmoji()">👍 Đổi biểu tượng nhanh</button>
             <button onclick="app.chatActionSetNickname()" id="chatMenuNicknameBtn">✏️ Đặt biệt danh</button>
             <button onclick="app.chatActionCreateGroup()" id="chatMenuGroupBtn">👥 Tạo nhóm với bạn này</button>
             <button onclick="app.chatActionRenameGroup()" id="chatMenuRenameGroupBtn" style="display:none">✏️ Đổi tên nhóm</button>
@@ -263,7 +315,7 @@
 
     <!-- Chat search bar (hidden by default) -->
     <div id="chatSearchBar" style="display:none; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border-color); background: var(--bg-secondary); position: relative;">
-      <input type="text" id="chatSearchInput" placeholder="Tìm kiếm tin nhắn (không phân biệt hoa/thường, dấu)..." style="width:100%; padding:0.3rem 0.6rem; border-radius:20px; border:1px solid var(--border-color); font-size:0.85rem; background:var(--bg-primary);" oninput="app.searchChatMessages(this.value)" autocomplete="off">
+      <input type="text" id="chatSearchInput" placeholder="Tìm kiếm tin nhắn..." style="width:100%; padding:0.3rem 0.6rem; border-radius:20px; border:1px solid var(--border-color); font-size:0.85rem; background:var(--bg-primary);" oninput="app.searchChatMessages(this.value)" autocomplete="off">
       <div id="chatSearchResultsDropdown" class="chat-search-dropdown" style="display:none;"></div>
     </div>
 
@@ -299,6 +351,12 @@
         <input type="file" id="chatMediaInput" accept="image/*,video/*" style="display:none" onchange="app.handleChatMediaUpload(this)">
       </label>
       <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
+      <div class="chat-composer-emoji-wrap">
+        <button type="button" class="chat-composer-emoji-trigger" title="Biểu tượng cảm xúc" onclick="app.toggleComposerEmojiPicker(event)">🙂</button>
+            <button type="button" class="chat-composer-emoji-trigger" title="GIF" onclick="app.openGifPicker('chat')" style="font-size:0.72rem;font-weight:700;color:#0084ff;">GIF</button>
+        <div class="chat-composer-emoji-picker" id="chatEmojiPickerComposer"></div>
+      </div>
+      <button type="button" class="chat-composer-like" title="Gửi nhanh 👍">👍</button>
       <button onclick="app.sendChatMessage()">➤</button>
     </div>
   </div>
@@ -355,6 +413,9 @@
         <button class="btn-icon" onclick="document.getElementById('addGroupMemberModal').style.display='none'">✕</button>
       </div>
       <div id="addGroupMemberList" style="max-height:350px; overflow-y:auto;"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:.85rem;">
+        <button type="button" id="inviteSelectedGroupMembersBtn" class="btn-primary" onclick="app.submitSelectedGroupMembers()">Mời thành viên đã chọn</button>
+      </div>
     </div>
   </div>
 
@@ -833,7 +894,7 @@
       <div class="form-group" style="margin-bottom: 1rem;">
         <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Ảnh / Video đính kèm:</label>
         <div id="editPostMediaPreviewContainer" style="display: none; position: relative; margin-bottom: 0.5rem; max-height: 220px; overflow: hidden; border-radius: 8px; border: 1px solid var(--border-color); text-align: center; background: #000;">
-          <img id="editPostImagePreview" src="" alt="Ảnh xem trước" style="max-height: 200px; max-width: 100%; object-fit: contain; display: none; margin: 0 auto;">
+          <div id="editPostImagePreview" class="edit-post-image-preview-gallery" style="display: none;"></div>
           <video id="editPostVideoPreview" src="" controls style="max-height: 200px; max-width: 100%; display: none; margin: 0 auto;"></video>
           <button type="button" class="btn-remove-media" onclick="app.removeEditPostMedia()" style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.65); color: #fff; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.9rem;" title="Gỡ file đính kèm">✖</button>
         </div>
@@ -1010,6 +1071,6 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=20261110-admin2"></script>
 </body>
 </html>

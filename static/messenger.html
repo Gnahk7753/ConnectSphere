@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Đoạn chat - Mạng Xã Hội Mini</title>
+  <link rel="stylesheet" href="css/style.css?v=20261110-btnfix1">
+  <link rel="icon" href="img/default-avatar.svg" type="image/svg+xml">
+</head>
+<body class="messenger-page">
+  <header class="navbar">
+    <div class="nav-left">
+      <a href="index.html" class="logo-container">
+        <div class="logo-icon logo-svg-box" aria-label="Mạng Xã Hội Mini">
+          <svg width="34" height="34" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M14 20C14 11.1634 21.1634 4 30 4H70C78.8366 4 86 11.1634 86 20V62C86 70.8366 78.8366 78 70 78H36L14 94L20 78H30C21.1634 78 14 70.8366 14 62V20Z" fill="#6c2bd9"/>
+            <line x1="50" y1="28" x2="30" y2="58" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="30" y1="58" x2="70" y2="58" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <line x1="70" y1="58" x2="50" y2="28" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+            <circle cx="50" cy="28" r="10" fill="#f59e0b"/>
+            <circle cx="50" cy="28" r="4.5" fill="white"/>
+            <circle cx="30" cy="58" r="10" fill="#ec4899"/>
+            <circle cx="30" cy="58" r="4.5" fill="white"/>
+            <circle cx="70" cy="58" r="10" fill="#10b981"/>
+            <circle cx="70" cy="58" r="4.5" fill="white"/>
+          </svg>
+        </div>
+        <span>Mạng Xã Hội Mini</span>
+      </a>
+    </div>
+    <div class="nav-right">
+      <button class="btn-icon theme-toggle" id="themeToggleBtn" title="Chuyển chế độ Sáng / Tối">🌙</button>
+      <div class="user-nav-badge" id="navUserBadge" onclick="app.openMyProfile()">
+        <img id="navAvatar" src="/img/default-avatar.svg" alt="Avatar">
+        <span id="navFullname">Đang tải...</span>
+      </div>
+      <button class="btn-icon" id="logoutBtn" title="Đăng xuất" style="color:var(--accent-red);">🚪</button>
+    </div>
+  </header>
+
+  <main class="messenger-main">
+    <aside class="messenger-sidebar">
+      <div class="widget-card" id="chatListWidget">
+        <div class="widget-title">
+          <span>Đoạn chat</span>
+          <div class="chat-list-header-actions">
+            <div class="chat-list-menu-wrap">
+              <button type="button" class="chat-list-menu-trigger" title="Tùy chọn đoạn chat" onclick="app.toggleChatListMenu(event)">•••</button>
+              <div class="chat-list-menu" id="chatListMenu">
+                <button type="button" onclick="app.togglePendingMessages()">📨 Tin nhắn đang chờ</button>
+                <button type="button" onclick="app.toggleArchivedChats()">🗃️ Đoạn chat lưu trữ</button>
+                <button type="button" onclick="app.toggleBlockedUsers()">🚫 Tài khoản đã bị chặn</button>
+                <button type="button" onclick="app.showChatHelp()">❔ Trợ giúp</button>
+              </div>
+            </div>
+            <button class="btn-create-group-chat" onclick="app.openCreateGroupModal([])" title="Tạo nhóm mới">＋</button>
+          </div>
+        </div>
+        <div class="all-message-search">
+          <label class="all-message-search-input-wrap">
+            <span class="all-message-search-icon" aria-hidden="true"></span>
+            <input id="allMessagesSearchInput" type="search" placeholder="Tìm kiếm trên Messenger" autocomplete="off"
+                   oninput="app.searchAllMessages(this.value)">
+          </label>
+          <div class="all-message-search-filters" id="allMessageSearchFilters">
+            <button type="button" class="active" data-filter="all" onclick="app.setAllMessageSearchFilter('all', this)">Tất cả</button>
+            <button type="button" data-filter="people" onclick="app.setAllMessageSearchFilter('people', this)">Bạn bè</button>
+            <button type="button" data-filter="messages" onclick="app.setAllMessageSearchFilter('messages', this)">Tin nhắn</button>
+            <button type="button" data-filter="groups" onclick="app.setAllMessageSearchFilter('groups', this)">Nhóm</button>
+          </div>
+          <div class="all-message-search-results" id="allMessagesSearchResults"></div>
+        </div>
+        <div class="chat-filter-pills">
+          <button class="chat-filter-pill active" onclick="app.filterContacts('all', this)">Tất cả</button>
+          <button class="chat-filter-pill" onclick="app.filterContacts('friends', this)">Bạn bè</button>
+          <button class="chat-filter-pill" onclick="app.filterContacts('unread', this)">Chưa đọc</button>
+          <button class="chat-filter-pill" onclick="app.filterContacts('groups', this)">Nhóm</button>
+        </div>
+        <div class="suggestion-list" id="contactsContainer">
+          <div class="all-message-search-empty">Đang tải cuộc trò chuyện...</div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="messenger-chat-pane">
+      <div class="chat-window" id="chatWindow">
+        <div class="chat-header">
+          <div class="chat-partner-info">
+            <img id="chatPartnerAvatar" src="/img/default-avatar.svg" alt="Avatar" class="group-avatar-clickable"
+                 onclick="app.onChatAvatarClick(event)" title="Nhấn để xem ảnh lớn">
+            <div onclick="app.onChatPartnerNameClick(event)" style="cursor:pointer;">
+              <div class="chat-partner-name" id="chatPartnerName">Chọn một cuộc trò chuyện</div>
+              <div id="chatPartnerStatus" style="font-size:.72rem;color:var(--text-muted);"> </div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:.3rem;">
+            <div class="chat-more-menu-container">
+              <button class="btn-icon" style="width:32px;height:32px;" onclick="app.toggleChatMenu()" title="Tùy chọn">•••</button>
+              <div class="chat-more-dropdown" id="chatMoreDropdown">
+                <button onclick="app.chatActionSearchMessages()">🔍 Tìm trong cuộc trò chuyện</button>
+                <button onclick="app.chatActionQuickEmoji()">👍 Đổi biểu tượng nhanh</button>
+                <button onclick="app.chatActionSetNickname()" id="chatMenuNicknameBtn">✏️ Đặt biệt danh</button>
+                <button onclick="app.chatActionCreateGroup()" id="chatMenuGroupBtn">👥 Tạo nhóm với bạn này</button>
+                <button onclick="app.chatActionRenameGroup()" id="chatMenuRenameGroupBtn" style="display:none">✏️ Đổi tên nhóm</button>
+                <button onclick="app.chatActionViewMembers()" id="chatMenuMembersBtn" style="display:none">👥 Xem thành viên</button>
+                <button onclick="app.chatActionAddMember()" id="chatMenuAddMemberBtn" style="display:none">➕ Thêm thành viên</button>
+                <button onclick="app.chatActionRemoveMember()" id="chatMenuRemoveMemberBtn" style="display:none">➖ Xóa thành viên</button>
+                <button onclick="app.chatActionClearMessages()">🗑️ Xóa đoạn chat</button>
+                <button onclick="app.chatActionLeaveGroup()" id="chatMenuLeaveBtn" style="display:none;color:var(--accent-red);">🚪 Rời khỏi nhóm</button>
+                <button onclick="app.chatActionBlockUser()" id="chatMenuBlockBtn">🚫 Chặn người dùng</button>
+                <button onclick="app.chatActionReportUser()" style="color:var(--accent-red);">🚩 Báo cáo vi phạm</button>
+              </div>
+            </div>
+            <button class="btn-icon" style="width:32px;height:32px;" onclick="app.closeChat()" title="Đóng cuộc trò chuyện">✕</button>
+          </div>
+        </div>
+
+        <div id="chatSearchBar" style="display:none;padding:.55rem .8rem;border-bottom:1px solid var(--border-color);background:var(--bg-secondary);position:relative;">
+          <input type="text" id="chatSearchInput" placeholder="Tìm kiếm tin nhắn..." autocomplete="off"
+                 oninput="app.searchChatMessages(this.value)"
+                 style="width:100%;padding:.55rem .8rem;border-radius:20px;border:1px solid var(--border-color);background:var(--bg-primary);color:var(--text-main);">
+          <div id="chatSearchResultsDropdown" class="chat-search-dropdown" style="display:none;"></div>
+        </div>
+
+        <div class="chat-body" id="chatBody">
+          <div class="load-more-chat-box" id="loadMoreChatBox">
+            <button class="btn-load-more-chat" id="btnLoadMoreChat" onclick="app.loadOlderMessages()">⬆️ Tải tin nhắn cũ hơn</button>
+          </div>
+          <div id="messagesList"></div>
+          <div id="typingIndicator" class="typing-indicator" style="display:none;">
+            <span class="typing-text">Đang soạn tin</span>
+            <div class="typing-dots"><span></span><span></span><span></span></div>
+          </div>
+          <div class="chat-window-empty" id="chatEmptyState">Chọn bạn bè hoặc nhóm để bắt đầu trò chuyện.</div>
+        </div>
+        <div id="chatReplyBar" class="chat-reply-bar" style="display:none;">
+          <div>↪️ Đang trả lời <strong id="chatReplyAuthor">...</strong>: <span id="chatReplySnippet" style="font-style:italic;">...</span></div>
+          <button class="chat-reply-cancel-btn" onclick="app.cancelChatReply()" title="Hủy trả lời">✕</button>
+        </div>
+        <div class="chat-footer">
+          <label class="chat-media-btn" title="Gửi ảnh/video" style="cursor:pointer;font-size:1.2rem;padding:0 .4rem;color:var(--text-muted);display:flex;align-items:center;">
+            📎
+            <input type="file" id="chatMediaInput" accept="image/*,video/*" style="display:none" onchange="app.handleChatMediaUpload(this)">
+          </label>
+          <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
+          <div class="chat-composer-emoji-wrap">
+            <button type="button" class="chat-composer-emoji-trigger" title="Biểu tượng cảm xúc" onclick="app.toggleComposerEmojiPicker(event)">🙂</button>
+            <button type="button" class="chat-composer-emoji-trigger" title="GIF" onclick="app.openGifPicker('chat')" style="font-size:0.72rem;font-weight:700;color:#0084ff;">GIF</button>
+            <div class="chat-composer-emoji-picker" id="chatEmojiPickerComposer"></div>
+          </div>
+          <button type="button" class="chat-composer-like" title="Gửi nhanh 👍">👍</button>
+          <button onclick="app.sendChatMessage()">➤</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-overlay" id="nicknameModal" style="display:none;">
+    <div class="auth-card" style="max-width:380px;">
+      <div class="auth-header"><h2>✏️ Đặt biệt danh</h2></div>
+      <div class="form-group">
+        <label>Biệt danh cho <strong id="nicknameTargetName"></strong>:</label>
+        <input type="text" id="nicknameInput" placeholder="Nhập biệt danh..." maxlength="50">
+      </div>
+      <div style="display:flex;gap:.5rem;">
+        <button class="btn-secondary" style="flex:1" onclick="document.getElementById('nicknameModal').style.display='none'">Hủy</button>
+        <button class="btn-primary" style="flex:1" onclick="app.submitNickname()">Lưu</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-overlay" id="groupMembersModal" style="display:none;">
+    <div class="auth-card" style="max-width:520px;">
+      <div class="auth-header"><h2>👥 Thành viên nhóm</h2><button class="btn-icon" onclick="document.getElementById('groupMembersModal').style.display='none'">✕</button></div>
+      <div id="groupMembersList"></div>
+    </div>
+  </div>
+  <div class="modal-overlay" id="createGroupModal" style="display:none;">
+    <div class="auth-card" style="max-width:440px;">
+      <div class="auth-header">
+        <h2>👥 Tạo nhóm mới</h2>
+        <p>Kết nối và trò chuyện cùng nhiều bạn bè</p>
+      </div>
+      <div class="form-group">
+        <label>Tên nhóm</label>
+        <input type="text" id="newGroupName" placeholder="Ví dụ: Hội bạn thân, Nhóm Đồ án C++">
+      </div>
+      <div class="form-group">
+        <label>Mô tả nhóm</label>
+        <input type="text" id="newGroupDesc" placeholder="Mục đích hoặc nội quy nhóm...">
+      </div>
+      <div class="form-group">
+        <label>Mời bạn bè vào nhóm</label>
+        <div id="groupInviteFriendsList" style="max-height:180px;overflow-y:auto;border:1px solid var(--border-color);border-radius:8px;padding:.5rem;"></div>
+      </div>
+      <div style="display:flex;gap:.75rem;margin-top:1rem;">
+        <button class="btn-secondary" style="flex:1;" onclick="app.closeCreateGroupModal()">Hủy</button>
+        <button class="btn-primary" style="flex:1;" onclick="app.submitCreateGroup()">Tạo nhóm</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-overlay" id="reportModal" style="display:none;">
+    <div class="auth-card" style="max-width:440px;">
+      <div class="auth-header"><h2 id="reportModalHeading">🚩 Báo cáo vi phạm</h2></div>
+      <div class="form-group">
+        <label>Lý do</label>
+        <select id="reportReasonSelect"><option value="SPAM">Spam</option><option value="HARASSMENT">Quấy rối</option><option value="INAPPROPRIATE">Nội dung không phù hợp</option><option value="OTHER">Khác</option></select>
+      </div>
+      <div class="form-group"><label>Chi tiết</label><textarea id="reportDetailInput"></textarea></div>
+      <div style="display:flex;gap:.5rem;">
+        <button class="btn-secondary" style="flex:1" onclick="app.closeReportModal()">Hủy</button>
+        <button class="btn-primary" style="flex:1" onclick="app.submitReport()">Gửi báo cáo</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+  <div class="image-lightbox-overlay" id="imageLightbox" onclick="if(event.target===this) app.closeImageLightbox()">
+    <img id="imageLightboxImg" class="image-lightbox-img" src="" alt="Xem ảnh" onclick="event.stopPropagation()">
+    <div class="image-lightbox-toolbar" onclick="event.stopPropagation()">
+      <button type="button" onclick="app.zoomImageLightbox(.2)">🔍+</button>
+      <button type="button" onclick="app.zoomImageLightbox(-.2)">🔍−</button>
+      <button type="button" onclick="app.resetImageLightboxZoom()">1:1</button>
+      <button type="button" onclick="app.closeImageLightbox()">✕ Đóng</button>
+    </div>
+  </div>
+  <script src="js/vietnamData.js"></script>
+  <script src="js/app.js?v=20261110-admin2"></script>
+</body>
+</html>

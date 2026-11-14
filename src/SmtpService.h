@@ -1,95 +1,127 @@
 #pragma once
 
-#include <iostream>
-#include <string>
-#include <random>
-#include <sstream>
-#include <fstream>
 #include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <sstream>
+#include <string>
 #include <thread>
-#include "json.hpp"
+
+#include "Security.h"
 
 using json = nlohmann::json;
 
+// ============================================================================
+//  Gửi OTP qua Gmail SMTP.
+//  BẢO MẬT:
+//   - Địa chỉ nhận được kiểm tra bằng sec::isValidEmail (không có nháy, khoảng trắng, ký tự shell).
+//   - Nội dung thư chỉ gồm chuỗi cố định + 6 chữ số do server sinh ra (không chứa dữ liệu người dùng).
+//   - Tên file tạm ngẫu nhiên, xoá ngay sau khi gửi (bản cũ dùng tên cố định -> race condition).
+//   - Cấu hình đọc từ biến môi trường / .env (SMTP_EMAIL, SMTP_PASSWORD), file json chỉ là phương án dự phòng.
+// ============================================================================
 class SmtpService {
 public:
-    static std::string generate6DigitOtp() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<int> dis(100000, 999999);
-        return std::to_string(dis(gen));
+    static std::string generate6DigitOtp() { return sec::randomDigits6(); }
+
+    struct Config {
+        std::string user;
+        std::string pass;
+        bool ok() const { return !user.empty() && !pass.empty(); }
+    };
+
+    static Config loadConfig() {
+        Config c;
+        c.user = sec::envOr("SMTP_EMAIL");
+        c.pass = sec::envOr("SMTP_PASSWORD");
+        if (c.ok()) return c;
+        // Dự phòng: các file json cũ (hỗ trợ cả 2 cặp khoá vì bản cũ đặt tên không khớp file mẫu)
+        for (const char* path : {"config.json", "email_config.json"}) {
+            std::ifstream f(path);
+            if (!f.is_open()) continue;
+            try {
+                json j = json::parse(f);
+                std::string u = j.value("smtp_email", j.value("sender_email", ""));
+                std::string p = j.value("smtp_password", j.value("app_password", ""));
+                if (!u.empty() && !p.empty()) { c.user = u; c.pass = p; return c; }
+            } catch (...) {}
+        }
+        return c;
     }
 
-    /**
-     * Gửi mã xác thực OTP 6 số tới Gmail (Tự động gửi qua SMTP Gmail nếu có cấu hình trong config.json)
-     */
+    static bool isConfigured() {
+        Config c = loadConfig();
+        return c.ok() && sec::isValidEmail(c.user);
+    }
+
+    /** Gửi OTP. Trả về true nếu đã đưa vào hàng đợi gửi (hoặc ghi ra console ở chế độ dev). */
     static bool sendOtpEmail(const std::string& toEmail, const std::string& otpCode, const std::string& purposeText = "Đăng ký tài khoản") {
-        std::cout << "\n========================================================" << std::endl;
-        std::cout << " [GMAIL SMTP SERVICE] GỬI EMAIL XÁC THỰC 6 CHỮ SỐ" << std::endl;
-        std::cout << " Người nhận : " << toEmail << std::endl;
-        std::cout << " Mục đích   : " << purposeText << std::endl;
-        std::cout << " MÃ XÁC THỰC: [ " << otpCode << " ] (Hiệu lực 5 phút)" << std::endl;
-        std::cout << "========================================================\n" << std::endl;
+        if (!sec::isValidEmail(toEmail)) return false;
+        for (char c : otpCode) if (c < '0' || c > '9') return false;
+        if (otpCode.size() != 6) return false;
 
-        // Kiểm tra và khởi tạo file config.json nếu chưa có
-        std::string smtpUser = "";
-        std::string smtpPass = "";
+        const Config cfg = loadConfig();
+        const bool configured = cfg.ok() && sec::isValidEmail(cfg.user) && cfg.pass.find_first_of("\r\n\0") == std::string::npos;
+        const bool production = sec::envFlag("PRODUCTION");
 
-        std::ifstream inCfg("config.json");
-        if (inCfg.is_open()) {
-            try {
-                json j = json::parse(inCfg);
-                smtpUser = j.value("smtp_email", "");
-                smtpPass = j.value("smtp_password", "");
-            } catch (...) {}
-            inCfg.close();
-        } else {
-            // Tạo file mẫu hướng dẫn
-            std::ofstream outCfg("config.json");
-            if (outCfg.is_open()) {
-                json sample = {
-                    {"smtp_email", ""},
-                    {"smtp_password", ""},
-                    {"huong_dan", "Nhap dia chi Gmail va Mat khau ung dung (16 ky tu tao tai myaccount.google.com/apppasswords) vao day de he thong tu dong gui mail qua Gmail that."}
-                };
-                outCfg << sample.dump(2);
-                outCfg.close();
+        if (!configured) {
+            // Chế độ phát triển: in mã ra console của máy chủ (KHÔNG bao giờ trả về qua API trừ khi DEV_SHOW_OTP=1)
+            if (!production || sec::envFlag("DEV_SHOW_OTP")) {
+                std::cout << "[SMTP] Chưa cấu hình Gmail (SMTP_EMAIL/SMTP_PASSWORD). Mã OTP cho " << toEmail << ": " << otpCode << std::endl;
+            } else {
+                std::cerr << "[SMTP] Chưa cấu hình SMTP_EMAIL/SMTP_PASSWORD trong .env: không thể gửi OTP." << std::endl;
             }
+            return !production || sec::envFlag("DEV_SHOW_OTP");
         }
 
-        // Nếu đã cấu hình Gmail và App Password -> Gửi mail thật qua PowerShell SMTP trong background thread
-        if (!smtpUser.empty() && !smtpPass.empty() && toEmail.find("@") != std::string::npos) {
-            std::thread([toEmail, otpCode, purposeText, smtpUser, smtpPass]() {
-                std::cout << "[GMAIL SMTP] Đang thực hiện gửi email thật tới: " << toEmail << "..." << std::endl;
-                std::string subject = "[Mạng Xã Hội Mini] Mã OTP xác thực: " + otpCode;
-                std::string body = "Xin chào,\n\nMã xác thực OTP của bạn cho thao tác [" + purposeText + "] là:\n\n   >>> " + otpCode + " <<<\n\nMã này có hiệu lực trong vòng 5 phút. Vui lòng không chia sẻ mã này cho bất kỳ ai.\n\nTrân trọng,\nĐội ngũ Mạng Xã Hội Mini.";
-
-                // Tạo script PowerShell tạm thời để gửi mail an toàn, tránh lỗi escape ký tự đặc biệt
-                std::string psScriptPath = "send_otp_temp.ps1";
-                std::ofstream psFile(psScriptPath);
-                if (psFile.is_open()) {
-                    psFile << "$sec = ConvertTo-SecureString '" << smtpPass << "' -AsPlainText -Force\n";
-                    psFile << "$cred = New-Object System.Management.Automation.PSCredential ('" << smtpUser << "', $sec)\n";
-                    psFile << "$body = @'\n" << body << "\n'@\n";
-                    psFile << "Send-MailMessage -From '" << smtpUser << "' -To '" << toEmail << "' -Subject '" << subject << "' -Body $body -Encoding ([System.Text.Encoding]::UTF8) -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential $cred -ErrorAction Stop\n";
-                    psFile.close();
-
-                    std::string cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File send_otp_temp.ps1 > nul 2>&1";
-                    int ret = std::system(cmd.c_str());
-                    if (ret == 0) {
-                        std::cout << " [GMAIL SMTP] Gửi email thành công tới: " << toEmail << std::endl;
-                    } else {
-                        std::cout << " [GMAIL SMTP] Gửi thất bại qua SMTP (kiểm tra lại Gmail/App Password trong config.json). Mã OTP vẫn có hiệu lực trên server: [" << otpCode << "]" << std::endl;
-                    }
-                    std::remove(psScriptPath.c_str());
-                }
-            }).detach();
-        } else {
-            std::cout << " [GMAIL SMTP LƯU Ý] Chưa cấu hình Gmail App Password trong file config.json." << std::endl;
-            std::cout << "   -> Bạn có thể lấy mã OTP trực tiếp từ console: [" << otpCode << "]" << std::endl;
-            std::cout << "   -> Hoặc điền 'smtp_email' và 'smtp_password' vào file config.json để gửi mail thật tự động." << std::endl;
-        }
-
+        std::thread([toEmail, otpCode, purposeText, cfg]() {
+            const std::string rnd = sec::randomToken(8);
+            const std::string subject = "[Mang Xa Hoi Mini] Ma OTP: " + otpCode;
+            const std::string body = "Xin chao,\n\nMa xac thuc OTP cua ban cho thao tac [" + purposeText + "] la: " + otpCode +
+                                     "\nMa co hieu luc trong 5 phut. Khong chia se ma nay cho bat ky ai.\n";
+            int ret = -1;
+#ifdef _WIN32
+            // PowerShell: mật khẩu đặt trong nháy đơn -> nhân đôi nháy đơn để không thể thoát khỏi chuỗi
+            auto psq = [](const std::string& s) {
+                std::string o;
+                for (char c : s) { if (c == '\'') o += "''"; else o += c; }
+                return o;
+            };
+            const std::string psPath = "send_otp_" + rnd + ".ps1";
+            {
+                std::ofstream ps(psPath);
+                if (!ps) return;
+                ps << "$sec = ConvertTo-SecureString '" << psq(cfg.pass) << "' -AsPlainText -Force\n";
+                ps << "$cred = New-Object System.Management.Automation.PSCredential ('" << psq(cfg.user) << "', $sec)\n";
+                ps << "Send-MailMessage -From '" << psq(cfg.user) << "' -To '" << psq(toEmail) << "' -Subject '" << psq(subject)
+                   << "' -Body '" << psq(body) << "' -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential $cred -ErrorAction Stop\n";
+            }
+            ret = std::system(("powershell -NoProfile -ExecutionPolicy Bypass -File " + psPath + " > nul 2>&1").c_str());
+            std::remove(psPath.c_str());
+#else
+            // Linux/macOS: dùng curl; thông tin đăng nhập nằm trong file cấu hình tạm (không lộ trên dòng lệnh)
+            const std::string mailPath = "/tmp/otp_mail_" + rnd + ".txt";
+            const std::string cfgPath = "/tmp/otp_curl_" + rnd + ".cfg";
+            {
+                std::ofstream m(mailPath);
+                m << "From: " << cfg.user << "\r\nTo: " << toEmail << "\r\nSubject: " << subject << "\r\n\r\n" << body;
+                std::ofstream c(cfgPath);
+                std::string safePass;
+                for (char ch : cfg.pass) { if (ch == '"' || ch == '\\') safePass += '\\'; safePass += ch; }
+                c << "user = \"" << cfg.user << ":" << safePass << "\"\n";
+                c << "url = \"smtps://smtp.gmail.com:465\"\n";
+                c << "mail-from = \"" << cfg.user << "\"\n";
+                c << "mail-rcpt = \"" << toEmail << "\"\n";
+                c << "upload-file = \"" << mailPath << "\"\n";
+            }
+            std::system(("chmod 600 " + cfgPath + " " + mailPath).c_str());
+            ret = std::system(("curl -s --max-time 30 -K " + cfgPath + " > /dev/null 2>&1").c_str());
+            std::remove(mailPath.c_str());
+            std::remove(cfgPath.c_str());
+#endif
+            if (ret == 0) std::cout << "[SMTP] Đã gửi OTP tới " << toEmail << std::endl;
+            else std::cerr << "[SMTP] Gửi OTP thất bại (kiểm tra Gmail App Password)." << std::endl;
+        }).detach();
         return true;
     }
 };

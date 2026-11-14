@@ -1,11 +1,13 @@
 .git
 .env
 .env.*
+!.env.example
 *.db
-*.db-shm
-*.db-wal
+*.db-*
 server.exe
+server_linux
 build/
+build.log
 .vscode/
 tai_khoan_test.txt
 email_config.json

@@ -1,4 +1,5 @@
 #pragma once
+#include "Security.h"
 /**
  * GeminiService - Tích hợp Google Gemini API để kiểm duyệt & phân loại bài viết.
  *
@@ -8,7 +9,7 @@
  *   GEMINI_MODERATION_ENABLED=true
  *   GEMINI_BLOCK_SEVERE=true
  *
- * Gọi HTTPS bằng curl CLI (tương thích Windows/Linux, không cần link OpenSSL).
+ * Gọi HTTPS bằng curl CLI (Windows, không cần link OpenSSL).
  */
 
 #include <string>
@@ -21,13 +22,14 @@
 #include <cstdlib>
 #include <cstdio>
 #include <vector>
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
 struct GeminiModerationResult {
     bool ok = false;                    // API gọi thành công?
     std::string category = "doi_song";  // giai_tri | hoc_tap | cong_nghe | doi_song | the_thao | khac
+    std::vector<std::string> categories = {"doi_song"};
     std::string category_label = "Đời sống";
     std::string risk_level = "SAFE";    // SAFE | LOW | MEDIUM | HIGH | SEVERE
     std::vector<std::string> flags;     // spam, ads, insult, violence, inappropriate...
@@ -45,80 +47,37 @@ public:
     }
 
     void loadEnv(const std::string& path = ".env") {
-    
-        env_.clear();
-    
-        // 1. Đọc file .env nếu tồn tại
         std::ifstream f(path);
-        std::string line;
-    
-        while (f && std::getline(f, line)) {
-    
-            line = trim(line);
-    
-            if (line.empty() || line[0] == '#')
-                continue;
-    
-            auto pos = line.find('=');
-    
-            if (pos == std::string::npos)
-                continue;
-    
-            std::string key = trim(line.substr(0, pos));
-            std::string val = trim(line.substr(pos + 1));
-    
-            if (val.size() >= 2 &&
-                ((val.front() == '"' && val.back() == '"') ||
-                 (val.front() == '\'' && val.back() == '\''))) {
-    
-                val = val.substr(1, val.size() - 2);
+        if (f.is_open()) {
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.empty() || line[0] == '#') continue;
+                auto pos = line.find('=');
+                if (pos == std::string::npos) continue;
+                std::string key = trim(line.substr(0, pos));
+                std::string val = trim(line.substr(pos + 1));
+                if (val.size() >= 2 && ((val.front() == '"' && val.back() == '"') || (val.front() == '\'' && val.back() == '\''))) {
+                    val = val.substr(1, val.size() - 2);
+                }
+                env_[key] = val;
             }
-    
-            env_[key] = val;
-        }
-    
-        // 2. Ưu tiên biến môi trường của hosting
-        const char* key = std::getenv("GEMINI_API_KEY");
-        const char* model = std::getenv("GEMINI_MODEL");
-        const char* enabled = std::getenv("GEMINI_MODERATION_ENABLED");
-        const char* block = std::getenv("GEMINI_BLOCK_SEVERE");
-    
-        if (key) env_["GEMINI_API_KEY"] = key;
-        if (model) env_["GEMINI_MODEL"] = model;
-        if (enabled) env_["GEMINI_MODERATION_ENABLED"] = enabled;
-        if (block) env_["GEMINI_BLOCK_SEVERE"] = block;
-    
-        // 3. Nạp cấu hình
-        apiKey_ = envGet("GEMINI_API_KEY", "");
-    
-        model_ = envGet(
-            "GEMINI_MODEL",
-            "gemini-3.8-flash"
-        );
-    
-        enabled_ = toBool(
-            envGet("GEMINI_MODERATION_ENABLED", "true")
-        );
-    
-        blockSevere_ = toBool(
-            envGet("GEMINI_BLOCK_SEVERE", "true")
-        );
-    
-        // 4. Thông báo trạng thái
-        if (apiKey_.empty()) {
-    
-            std::cout
-                << "[Gemini] Không có API KEY!"
-                << " Đang sử dụng fallback.\n";
-    
         } else {
-    
-            std::cout
-                << "[Gemini] API đã kết nối cấu hình."
-                << " Model: " << model_
-                << " | Moderation: "
-                << (enabled_ ? "ON" : "OFF")
-                << std::endl;
+            std::cout << "[Gemini] Không tìm thấy file .env — dùng biến môi trường hoặc fallback từ khóa.\n";
+        }
+
+        const auto setting = [this](const char* name, const std::string& fallback) {
+            const std::string processValue = sec::envOr(name);
+            return processValue.empty() ? envGet(name, fallback) : processValue;
+        };
+        apiKey_ = setting("GEMINI_API_KEY", "");
+        model_ = setting("GEMINI_MODEL", "gemini-2.0-flash");
+        enabled_ = toBool(setting("GEMINI_MODERATION_ENABLED", "true"));
+        blockSevere_ = toBool(setting("GEMINI_BLOCK_SEVERE", "true"));
+
+        if (apiKey_.empty()) {
+            std::cout << "[Gemini] GEMINI_API_KEY trống — dùng phân loại từ khóa local.\n";
+        } else {
+            std::cout << "[Gemini] Đã nạp API Key (ẩn). Model: " << model_ << " | moderation=" << (enabled_ ? "ON" : "OFF") << "\n";
         }
     }
 
@@ -145,7 +104,8 @@ public:
         std::string prompt =
             "Bạn là hệ thống kiểm duyệt mạng xã hội tiếng Việt. Phân tích bài viết sau và trả về DUY NHẤT một JSON hợp lệ, không markdown, không giải thích:\n"
             "{\n"
-            "  \"category\": \"giai_tri|hoc_tap|cong_nghe|doi_song|the_thao|khac\",\n"
+            "  \"categories\": [\"giai_tri|hoc_tap|cong_nghe|doi_song|the_thao|khac\"],\n"
+            "  \"category\": \"nhãn phù hợp nhất trong categories để tương thích\",\n"
             "  \"category_label\": \"Giải trí|Học tập|Công nghệ|Đời sống|Thể thao|Khác\",\n"
             "  \"risk_level\": \"SAFE|LOW|MEDIUM|HIGH|SEVERE\",\n"
             "  \"flags\": [\"spam|ads|insult|violence|hate|sexual|scam|inappropriate\"],\n"
@@ -177,6 +137,14 @@ public:
             r.used_ai = true;
             r.category = j.value("category", "doi_song");
             r.category_label = j.value("category_label", categoryLabel(r.category));
+            r.categories.clear();
+            if (j.contains("categories") && j["categories"].is_array()) {
+                for (const auto& category : j["categories"]) {
+                    if (category.is_string()) r.categories.push_back(category.get<std::string>());
+                }
+            } else {
+                r.categories.push_back(r.category);
+            }
             r.risk_level = j.value("risk_level", "SAFE");
             r.action = j.value("action", "ALLOW");
             r.reason = j.value("reason", "");
@@ -236,10 +204,22 @@ private:
 
     static void normalizeCategory(GeminiModerationResult& r) {
         static const char* allowed[] = {"giai_tri", "hoc_tap", "cong_nghe", "doi_song", "the_thao", "khac"};
-        bool ok = false;
-        for (auto* a : allowed) if (r.category == a) { ok = true; break; }
-        if (!ok) r.category = "doi_song";
-        if (r.category_label.empty()) r.category_label = categoryLabel(r.category);
+        std::vector<std::string> normalized;
+        const auto addAllowed = [&](const std::string& category) {
+            for (const auto* candidate : allowed) {
+                if (category == candidate &&
+                    std::find(normalized.begin(), normalized.end(), category) == normalized.end()) {
+                    normalized.push_back(category);
+                    return;
+                }
+            }
+        };
+        for (const auto& category : r.categories) addAllowed(category);
+        if (normalized.empty()) addAllowed(r.category);
+        if (normalized.empty()) normalized.push_back("doi_song");
+        r.categories = std::move(normalized);
+        r.category = r.categories.front();
+        r.category_label = categoryLabel(r.category);
     }
 
     static std::string extractJsonObject(const std::string& text) {
@@ -263,31 +243,43 @@ private:
         };
         std::string bodyStr = body.dump();
 
-        // Ghi body ra file tạm để tránh lỗi escape shell
+        // BẢO MẬT: tên file tạm ngẫu nhiên (tránh race giữa nhiều luồng), API key đặt trong file header
+        // (không nằm trên dòng lệnh/URL nên không lộ qua danh sách tiến trình), model/key được kiểm tra ký tự.
+        auto safeToken = [](const std::string& s2) {
+            if (s2.empty() || s2.size() > 200) return false;
+            for (unsigned char c : s2) if (!(std::isalnum(c) || c == '-' || c == '_' || c == '.')) return false;
+            return true;
+        };
+        if (!safeToken(model_) || !safeToken(apiKey_)) return false;
+        const std::string rnd = sec::randomToken(8);
 #ifdef _WIN32
-        std::string tmpIn = "gemini_req.json";
-        std::string tmpOut = "gemini_res.json";
+        const std::string tmpIn = "gemini_req_" + rnd + ".json";
+        const std::string tmpOut = "gemini_res_" + rnd + ".json";
+        const std::string tmpHdr = "gemini_hdr_" + rnd + ".txt";
 #else
-        std::string tmpIn = "/tmp/gemini_req.json";
-        std::string tmpOut = "/tmp/gemini_res.json";
+        const std::string tmpIn = "/tmp/gemini_req_" + rnd + ".json";
+        const std::string tmpOut = "/tmp/gemini_res_" + rnd + ".json";
+        const std::string tmpHdr = "/tmp/gemini_hdr_" + rnd + ".txt";
 #endif
         {
             std::ofstream ofs(tmpIn, std::ios::binary);
             if (!ofs) return false;
             ofs << bodyStr;
+            std::ofstream hf(tmpHdr, std::ios::binary);
+            if (!hf) return false;
+            hf << "x-goog-api-key: " << apiKey_ << "\n";
         }
+        struct TmpCleaner {
+            std::string a, b, c;
+            ~TmpCleaner() { std::remove(a.c_str()); std::remove(b.c_str()); std::remove(c.c_str()); }
+        } cleaner{tmpIn, tmpOut, tmpHdr};
 
-        std::string url = "https://generativelanguage.googleapis.com/v1beta/models/" + model_ + ":generateContent?key=" + apiKey_;
-
+        const std::string url = "https://generativelanguage.googleapis.com/v1beta/models/" + model_ + ":generateContent";
 #ifdef _WIN32
-        std::string cmd = "curl -s -X POST \"" + url + "\" -H \"Content-Type: application/json\" -d @" + tmpIn + " -o " + tmpOut + " --connect-timeout 15 --max-time 30";
+        std::string cmd = "curl -s -X POST \"" + url + "\" -H \"Content-Type: application/json\" -H @" + tmpHdr + " --data-binary @" + tmpIn + " -o " + tmpOut + " --connect-timeout 15 --max-time 30";
 #else
-        // Escape URL carefully - key may have special chars; put URL in single quotes after replacing '
-        std::string safeUrl = url;
-        // Use curl with file body
-        std::string cmd = "curl -s -X POST '" + safeUrl + "' -H 'Content-Type: application/json' --data-binary @" + tmpIn + " -o " + tmpOut + " --connect-timeout 15 --max-time 30 2>/dev/null";
+        std::string cmd = "curl -s -X POST '" + url + "' -H 'Content-Type: application/json' -H @" + tmpHdr + " --data-binary @" + tmpIn + " -o " + tmpOut + " --connect-timeout 15 --max-time 30 2>/dev/null";
 #endif
-
         int rc = std::system(cmd.c_str());
         (void)rc;
 
@@ -322,6 +314,7 @@ private:
     /** Fallback khi không có API key / API lỗi: phân loại & kiểm duyệt bằng từ khóa */
     static GeminiModerationResult fallbackAnalyze(const std::string& title, const std::string& content) {
         GeminiModerationResult r;
+        r.categories.clear();
         r.ok = true;
         r.used_ai = false;
         r.confidence = 0.55;
@@ -331,19 +324,20 @@ private:
         lower.reserve(text.size());
         for (unsigned char c : text) lower.push_back((char)std::tolower(c));
 
-        // Chủ đề
+        // Chủ đề có thể gắn nhiều nhãn để bộ xếp hạng dùng làm tín hiệu gợi ý.
         auto has = [&](const char* kw) { return lower.find(kw) != std::string::npos; };
-        if (has("code") || has("lập trình") || has("lap trinh") || has("ai ") || has("c++") || has("python") || has("công nghệ") || has("cong nghe") || has("phần mềm") || has("software") || has("app ")) {
-            r.category = "cong_nghe";
-        } else if (has("học") || has("hoc ") || has("thi ") || has("đại học") || has("dai hoc") || has("bài tập") || has("bai tap") || has("sinh viên") || has("sinh vien") || has("trường") || has("truong")) {
-            r.category = "hoc_tap";
-        } else if (has("bóng đá") || has("bong da") || has("world cup") || has("thể thao") || has("the thao") || has("cầu lông") || has("tennis") || has("olympic") || has("match") || has("chung kết")) {
-            r.category = "the_thao";
-        } else if (has("phim") || has("nhạc") || has("nhac") || has("game") || has("giải trí") || has("giai tri") || has("ca sĩ") || has("ca si") || has("netflix") || has("mv ")) {
-            r.category = "giai_tri";
-        } else {
-            r.category = "doi_song";
-        }
+        const auto addCategory = [&](const std::string& category) {
+            if (std::find(r.categories.begin(), r.categories.end(), category) == r.categories.end()) {
+                r.categories.push_back(category);
+            }
+        };
+        if (has("code") || has("lập trình") || has("lap trinh") || has("ai ") || has("c++") || has("python") || has("công nghệ") || has("cong nghe") || has("phần mềm") || has("software") || has("app ")) addCategory("cong_nghe");
+        if (has("học") || has("hoc ") || has("thi ") || has("đại học") || has("dai hoc") || has("bài tập") || has("bai tap") || has("sinh viên") || has("sinh vien") || has("trường") || has("truong")) addCategory("hoc_tap");
+        if (has("bóng đá") || has("bong da") || has("world cup") || has("thể thao") || has("the thao") || has("cầu lông") || has("tennis") || has("olympic") || has("match") || has("chung kết")) addCategory("the_thao");
+        if (has("phim") || has("nhạc") || has("nhac") || has("game") || has("giải trí") || has("giai tri") || has("ca sĩ") || has("ca si") || has("netflix") || has("mv ")) addCategory("giai_tri");
+        if (has("du lịch") || has("du lich") || has("gia đình") || has("gia dinh") || has("ẩm thực") || has("am thuc") || has("nấu ăn") || has("nau an") || has("cà phê") || has("ca phe")) addCategory("doi_song");
+        if (r.categories.empty()) addCategory("doi_song");
+        r.category = r.categories.front();
         r.category_label = categoryLabel(r.category);
 
         // Kiểm duyệt từ khóa nhạy cảm (đơn giản)

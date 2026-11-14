@@ -6,9 +6,69 @@
 #include <sstream>
 #include <iomanip>
 #include <ctime>
-#include "json.hpp"
+#include <mutex>
+#include <unordered_map>
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
+
+// =============================================================================
+// PresenceRegistry: theo dõi trạng thái ONLINE THẬT của người dùng (trong bộ nhớ).
+// - Mỗi tab trình duyệt có một session_id riêng và gửi heartbeat định kỳ.
+// - Người dùng ONLINE nếu còn ít nhất một session có heartbeat trong TTL_MS.
+// - Đăng xuất / đóng tab gọi /api/users/offline -> gỡ session ngay lập tức.
+// - Mất kết nối đột ngột: session tự hết hạn sau TTL_MS.
+// - Khởi động lại server: không ai online cho tới khi heartbeat mới gửi đến.
+// =============================================================================
+class PresenceRegistry {
+public:
+    static constexpr long long TTL_MS = 45000;
+
+    static PresenceRegistry& instance() {
+        static PresenceRegistry r;
+        return r;
+    }
+
+    void touch(const std::string& userId, const std::string& sessionId) {
+        if (userId.empty()) return;
+        std::lock_guard<std::mutex> lock(m_);
+        sessions_[userId][sessionId.empty() ? "default" : sessionId] = nowMs();
+    }
+
+    // Gỡ một session (đóng tab). Nếu sessionId rỗng thì gỡ toàn bộ (đăng xuất).
+    void remove(const std::string& userId, const std::string& sessionId) {
+        std::lock_guard<std::mutex> lock(m_);
+        auto it = sessions_.find(userId);
+        if (it == sessions_.end()) return;
+        if (sessionId.empty()) sessions_.erase(it);
+        else {
+            it->second.erase(sessionId);
+            if (it->second.empty()) sessions_.erase(it);
+        }
+    }
+
+    bool isOnline(const std::string& userId) {
+        std::lock_guard<std::mutex> lock(m_);
+        auto it = sessions_.find(userId);
+        if (it == sessions_.end()) return false;
+        long long now = nowMs();
+        bool online = false;
+        for (auto s = it->second.begin(); s != it->second.end();) {
+            if (now - s->second <= TTL_MS) { online = true; ++s; }
+            else s = it->second.erase(s);
+        }
+        if (it->second.empty()) sessions_.erase(it);
+        return online;
+    }
+
+private:
+    static long long nowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    std::mutex m_;
+    std::unordered_map<std::string, std::unordered_map<std::string, long long>> sessions_;
+};
 
 struct User {
     std::string id;
@@ -33,17 +93,7 @@ struct User {
     std::string user_token;
 
     bool isOnline() const {
-        if (last_active_at.empty()) return false;
-        std::tm t = {};
-        t.tm_isdst = -1;
-        std::istringstream ss(last_active_at);
-        ss >> std::get_time(&t, "%Y-%m-%d %H:%M:%S");
-        if (ss.fail()) return false;
-        t.tm_isdst = -1;
-        auto activeTime = std::mktime(&t);
-        auto now = std::chrono::system_clock::now();
-        auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-        return (std::abs(nowSec - activeTime) <= 300);
+        return PresenceRegistry::instance().isOnline(id);
     }
 
     json toJson(bool includePrivate = false) const {
@@ -51,7 +101,6 @@ struct User {
         json j = {
             {"id", id},
             {"username", username},
-            {"email", email},
             {"fullname", fullname},
             {"avatar", av},
             {"bio", bio},
@@ -69,8 +118,9 @@ struct User {
             {"residence", residence},
             {"user_token", user_token}
         };
+        // Thông tin riêng tư (email) chỉ trả về cho chính chủ hoặc admin; google_id không bao giờ ra ngoài
         if (includePrivate) {
-            j["google_id"] = google_id;
+            j["email"] = email;
         }
         return j;
     }
@@ -113,45 +163,6 @@ struct Suggestion {
     }
 };
 
-struct Comment {
-    std::string id;
-    std::string post_id;
-    std::string author_id;
-    std::string author_name;
-    std::string author_avatar;
-    std::string content;
-    std::string reply_to_id;
-    std::string reply_to_author;
-    std::string created_at;
-    std::vector<Comment> replies;
-
-    json toJson() const {
-        std::string av = author_avatar.empty() ? "/img/default-avatar.svg" : author_avatar;
-        json repArr = json::array();
-        for (const auto& r : replies) {
-            repArr.push_back(r.toJson());
-        }
-        return {
-            {"id", id},
-            {"post_id", post_id},
-            {"author_id", author_id},
-            {"author_name", author_name},
-            {"author_avatar", av},
-            {"content", content},
-            {"reply_to_id", reply_to_id},
-            {"reply_to_author", reply_to_author},
-            {"created_at", created_at},
-            {"replies", repArr}
-        };
-    }
-};
-
-struct ReactionUser {
-    std::string type; // "LIKE", "LOVE", "HAHA", "WOW", "SAD", "ANGRY"
-    std::string user_id;
-    std::string user_name;
-};
-
 struct TopReaction {
     std::string type;
     std::string icon;
@@ -166,6 +177,57 @@ struct TopReaction {
             {"user_names", user_names}
         };
     }
+};
+
+struct Comment {
+    std::string id;
+    std::string post_id;
+    std::string author_id;
+    std::string author_name;
+    std::string author_avatar;
+    std::string author_token;
+    std::string content;
+    std::string reply_to_id;
+    std::string reply_to_author;
+    std::string created_at;
+    std::string my_reaction;
+    int total_reactions = 0;
+    std::vector<TopReaction> top_reactions;
+    std::vector<Comment> replies;
+
+    json toJson() const {
+        std::string av = author_avatar.empty() ? "/img/default-avatar.svg" : author_avatar;
+        json repArr = json::array();
+        for (const auto& r : replies) {
+            repArr.push_back(r.toJson());
+        }
+        json topReactJson = json::array();
+        for (const auto& reaction : top_reactions) {
+            topReactJson.push_back(reaction.toJson());
+        }
+        return {
+            {"id", id},
+            {"post_id", post_id},
+            {"author_id", author_id},
+            {"author_name", author_name},
+            {"author_avatar", av},
+            {"author_token", author_token},
+            {"content", content},
+            {"reply_to_id", reply_to_id},
+            {"reply_to_author", reply_to_author},
+            {"created_at", created_at},
+            {"my_reaction", my_reaction},
+            {"total_reactions", total_reactions},
+            {"top_reactions", topReactJson},
+            {"replies", repArr}
+        };
+    }
+};
+
+struct ReactionUser {
+    std::string type; // "LIKE", "LOVE", "HAHA", "WOW", "SAD", "ANGRY"
+    std::string user_id;
+    std::string user_name;
 };
 
 struct SearchHistoryItem {
@@ -242,6 +304,7 @@ struct Post {
     OriginalPostInfo original_post;
     // AI Gemini moderation & ranking
     std::string category = "doi_song";       // giai_tri | hoc_tap | cong_nghe | doi_song | the_thao | khac
+    std::vector<std::string> categories = {"doi_song"};
     std::string category_label = "Đời sống";
     std::string moderation_status = "SAFE";  // SAFE | FLAGGED | BLOCKED
     std::string moderation_action = "ALLOW"; // ALLOW | FLAG | BLOCK
@@ -256,6 +319,14 @@ struct Post {
     json toJson() const {
         std::string av = author_avatar.empty() ? "/img/default-avatar.svg" : author_avatar;
         json commentsJson = json::array();
+        const auto countComments = [](const auto& self, const std::vector<Comment>& items) -> int {
+            int count = 0;
+            for (const auto& comment : items) {
+                count += 1 + self(self, comment.replies);
+            }
+            return count;
+        };
+        const int totalCommentCount = countComments(countComments, comments);
         for (const auto& c : comments) {
             commentsJson.push_back(c.toJson());
         }
@@ -282,10 +353,8 @@ struct Post {
             {"total_reactions", total_reactions},
             {"my_reaction", my_reaction},
             {"top_reactions", topReactJson},
-            {"comments_count", comments.empty() ? comments_count_cached : (int)comments.size()},
+            {"comments_count", totalCommentCount > 0 ? totalCommentCount : comments_count_cached},
             {"comments", commentsJson},
-            {"category", category},
-            {"category_label", category_label},
             {"moderation_status", moderation_status},
             {"moderation_action", moderation_action},
             {"moderation_reason", moderation_reason},
@@ -313,14 +382,20 @@ struct Message {
     std::string media_type; // "NONE", "IMAGE", "VIDEO"
     std::string media_url;
     std::string reaction;
+    json reactions = json::array();
     int reply_to_id = 0;
     std::string reply_to_text;
     int is_revoked = 0;
     int is_read = 0;
     std::string created_at;
+    json receipts = json::array();
 
     json toJson() const {
         std::string av = sender_avatar.empty() ? "/img/default-avatar.svg" : sender_avatar;
+        json reactionList = reactions;
+        if (reactionList.empty() && !reaction.empty()) reactionList.push_back({{"emoji", reaction}, {"count", 1}, {"users", ""}});
+        int reactionCount = 0;
+        for (const auto& item : reactionList) reactionCount += item.value("count", 0);
         return {
             {"id", id},
             {"conversation_id", conversation_id},
@@ -333,10 +408,13 @@ struct Message {
             {"media_type", media_type.empty() ? "NONE" : media_type},
             {"media_url", is_revoked ? "" : media_url},
             {"reaction", reaction},
+            {"reactions", reactionList},
+            {"reaction_count", reactionCount},
             {"reply_to_id", reply_to_id},
             {"reply_to_text", reply_to_text},
             {"is_revoked", is_revoked != 0},
             {"is_read", is_read != 0},
+            {"receipts", receipts},
             {"created_at", created_at}
         };
     }
@@ -353,13 +431,19 @@ struct GroupMessage {
     std::string media_type; // "NONE", "IMAGE", "VIDEO"
     std::string media_url;
     std::string reaction;
+    json reactions = json::array();
     int reply_to_id = 0;
     std::string reply_to_text;
     int is_revoked = 0;
     std::string created_at;
+    json receipts = json::array();
 
     json toJson() const {
         std::string av = sender_avatar.empty() ? "/img/default-avatar.svg" : sender_avatar;
+        json reactionList = reactions;
+        if (reactionList.empty() && !reaction.empty()) reactionList.push_back({{"emoji", reaction}, {"count", 1}, {"users", ""}});
+        int reactionCount = 0;
+        for (const auto& item : reactionList) reactionCount += item.value("count", 0);
         return {
             {"id", id},
             {"group_id", group_id},
@@ -371,9 +455,12 @@ struct GroupMessage {
             {"media_type", media_type.empty() ? "NONE" : media_type},
             {"media_url", is_revoked ? "" : media_url},
             {"reaction", reaction},
+            {"reactions", reactionList},
+            {"reaction_count", reactionCount},
             {"reply_to_id", reply_to_id},
             {"reply_to_text", reply_to_text},
             {"is_revoked", is_revoked != 0},
+            {"receipts", receipts},
             {"created_at", created_at}
         };
     }
@@ -390,6 +477,9 @@ struct Group {
     std::vector<std::string> member_ids;
     std::string last_message;
     std::string last_message_time;
+    std::string last_message_sender;
+    std::string last_message_sender_id;
+    std::string last_message_media_type = "NONE";
 
     json toJson() const {
         std::string av = avatar.empty() ? "/img/default-avatar.svg" : avatar;
@@ -403,7 +493,10 @@ struct Group {
             {"member_count", member_count},
             {"member_ids", member_ids},
             {"last_message", last_message},
-            {"last_message_time", last_message_time}
+            {"last_message_time", last_message_time},
+            {"last_message_sender", last_message_sender},
+            {"last_message_sender_id", last_message_sender_id},
+            {"last_message_media_type", last_message_media_type}
         };
     }
 };
@@ -446,8 +539,13 @@ struct Report {
     std::string reported_post_id;
     std::string reported_comment_id;
     std::string reason;
-    std::string status; // "PENDING", "RESOLVED", "DISMISSED"
+    std::string status; // "PENDING", "IN_PROGRESS", "RESOLVED", "DISMISSED"
     std::string created_at;
+    std::string category;
+    std::string resolution_note;
+    std::string resolved_by;
+    std::string resolved_at;
+    std::string reported_post_content;
 
     json toJson() const {
         return {
@@ -460,7 +558,12 @@ struct Report {
             {"reported_comment_id", reported_comment_id},
             {"reason", reason},
             {"status", status},
-            {"created_at", created_at}
+            {"created_at", created_at},
+            {"category", category},
+            {"resolution_note", resolution_note},
+            {"resolved_by", resolved_by},
+            {"resolved_at", resolved_at},
+            {"reported_post_content", reported_post_content}
         };
     }
 };

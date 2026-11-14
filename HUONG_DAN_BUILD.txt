@@ -1,0 +1,28 @@
+========================================
+HƯỚNG DẪN BUILD server.exe TRÊN WINDOWS
+========================================
+
+Dự án chỉ hỗ trợ Windows. Nếu server.exe cũ báo lỗi
+"Ứng dụng này không thể chạy trên PC của bạn", hãy build lại như sau:
+
+1. Cài MSYS2 (https://www.msys2.org/) hoặc dùng MinGW đã có.
+
+2. Trong terminal MSYS2 UCRT64, cài:
+   pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-sqlite3
+
+3. Vào thư mục project, chạy:
+   build.bat
+
+   hoặc lệnh:
+   g++ -std=c++17 src/main.cpp -Iinclude -Isrc -lsqlite3 -lws2_32 -lcrypt32 -O2 -o server.exe
+
+4. Chạy:
+   server.exe
+   hoặc run.bat
+
+Trình duyệt: http://localhost:8080
+
+Các tính năng mới (đã có trong source):
+- Tin nhắn chưa đọc: in đậm + dấu chấm xanh
+- Mục "Tài khoản đã bị chặn" + gỡ chặn
+- Trang Nhóm cộng đồng (groups.html)

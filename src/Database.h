@@ -4,18 +4,20 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <random>
 #include <chrono>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <cmath>
 #include <cctype>
-#include <cstdlib>
 #include <sqlite3.h>
 #include "Models.h"
+#include "Security.h"
 
 class Database {
 private:
@@ -37,10 +39,300 @@ private:
         return ss.str();
     }
 
+    json getMessageReactionSummaries(int messageId, bool isGroup) {
+        json byEmoji = json::object();
+        const char* table = isGroup ? "group_message_reactions" : "message_reactions";
+        const char* idColumn = isGroup ? "group_message_id" : "message_id";
+        const std::string sql = std::string("SELECT r.emoji, u.id, u.fullname, u.avatar, u.user_token ") +
+            "FROM " + table + " r JOIN users u ON u.id = r.user_id WHERE r." + idColumn +
+            " = ? ORDER BY r.created_at ASC, u.fullname COLLATE NOCASE ASC;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "Failed to load message reactions: " << sqlite3_errmsg(db) << std::endl;
+            return json::array();
+        }
+        sqlite3_bind_int(stmt, 1, messageId);
+        int stepResult = SQLITE_OK;
+        while ((stepResult = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const auto* emojiText = sqlite3_column_text(stmt, 0);
+            const auto* idText = sqlite3_column_text(stmt, 1);
+            const auto* nameText = sqlite3_column_text(stmt, 2);
+            const auto* avatarText = sqlite3_column_text(stmt, 3);
+            const auto* tokenText = sqlite3_column_text(stmt, 4);
+            const std::string emoji = emojiText ? reinterpret_cast<const char*>(emojiText) : "";
+            if (!byEmoji.contains(emoji)) byEmoji[emoji] = {{"emoji", emoji}, {"count", 0}, {"users", json::array()}};
+            byEmoji[emoji]["count"] = byEmoji[emoji]["count"].get<int>() + 1;
+            byEmoji[emoji]["users"].push_back({
+                {"user_id", idText ? reinterpret_cast<const char*>(idText) : ""},
+                {"name", nameText ? reinterpret_cast<const char*>(nameText) : "Người dùng"},
+                {"avatar", avatarText ? reinterpret_cast<const char*>(avatarText) : ""},
+                {"user_token", tokenText ? reinterpret_cast<const char*>(tokenText) : ""}
+            });
+        }
+        sqlite3_finalize(stmt);
+        if (stepResult != SQLITE_DONE) {
+            std::cerr << "Failed to read message reactions: " << sqlite3_errmsg(db) << std::endl;
+            return json::array();
+        }
+
+        json summaries = json::array();
+        for (auto& [emoji, summary] : byEmoji.items()) summaries.push_back(summary);
+        std::sort(summaries.begin(), summaries.end(), [](const json& left, const json& right) {
+            if (left["count"] != right["count"]) return left["count"].get<int>() > right["count"].get<int>();
+            return left["emoji"].get<std::string>() < right["emoji"].get<std::string>();
+        });
+        return summaries;
+    }
+
+    void syncPendingDeliveriesForUserLocked(const std::string& userId) {
+        if (userId.empty()) return;
+        const std::string now = getCurrentTimeStr();
+        const char* dSql = R"(
+            INSERT OR IGNORE INTO direct_message_receipts (message_id, user_id, delivered_at, read_at)
+            SELECT m.id, ?1, ?2, ''
+            FROM messages m
+            WHERE m.recipient_id = ?1 AND m.sender_id <> ?1
+              AND NOT EXISTS (
+                  SELECT 1 FROM direct_message_receipts r 
+                  WHERE r.message_id = m.id AND r.user_id = ?1
+              );
+        )";
+        sqlite3_stmt* dStmt = nullptr;
+        if (sqlite3_prepare_v2(db, dSql, -1, &dStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(dStmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(dStmt, 2, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(dStmt);
+            sqlite3_finalize(dStmt);
+        }
+
+        const char* gSql = R"(
+            INSERT OR IGNORE INTO group_message_receipts (group_message_id, user_id, delivered_at, read_at)
+            SELECT gm.id, ?1, ?2, ''
+            FROM group_messages gm
+            JOIN group_members gmbr ON gmbr.group_id = gm.group_id AND gmbr.user_id = ?1
+            WHERE gm.sender_id <> ?1
+              AND NOT EXISTS (
+                  SELECT 1 FROM group_messages_deleted gmd 
+                  WHERE gmd.message_id = gm.id AND gmd.user_id = ?1
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM group_message_receipts r 
+                  WHERE r.group_message_id = gm.id AND r.user_id = ?1
+              );
+        )";
+        sqlite3_stmt* gStmt = nullptr;
+        if (sqlite3_prepare_v2(db, gSql, -1, &gStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(gStmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(gStmt, 2, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(gStmt);
+            sqlite3_finalize(gStmt);
+        }
+    }
+
 public:
     Database() {}
     ~Database() {
         close();
+    }
+
+    json getMessageReceiptDetails(int messageId, bool isGroup) {
+        const char* table = isGroup ? "group_message_receipts" : "direct_message_receipts";
+        const char* messageColumn = isGroup ? "group_message_id" : "message_id";
+        const std::string sql = std::string(
+            "SELECT r.user_id, u.fullname, u.avatar, r.delivered_at, r.read_at "
+            "FROM ") + table + " r JOIN users u ON u.id = r.user_id WHERE r." +
+            messageColumn + " = ? ORDER BY CASE WHEN r.read_at = '' THEN 1 ELSE 0 END, r.read_at DESC, r.delivered_at DESC, u.fullname COLLATE NOCASE;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "Failed to load message receipts: " << sqlite3_errmsg(db) << std::endl;
+            return json::array();
+        }
+        sqlite3_bind_int(stmt, 1, messageId);
+        json receipts = json::array();
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const auto* userId = sqlite3_column_text(stmt, 0);
+            const auto* name = sqlite3_column_text(stmt, 1);
+            const auto* avatar = sqlite3_column_text(stmt, 2);
+            const auto* deliveredAt = sqlite3_column_text(stmt, 3);
+            const auto* readAt = sqlite3_column_text(stmt, 4);
+            receipts.push_back({
+                {"user_id", userId ? reinterpret_cast<const char*>(userId) : ""},
+                {"name", name ? reinterpret_cast<const char*>(name) : "Người dùng"},
+                {"avatar", avatar && *avatar ? reinterpret_cast<const char*>(avatar) : "/img/default-avatar.svg"},
+                {"delivered_at", deliveredAt ? reinterpret_cast<const char*>(deliveredAt) : ""},
+                {"read_at", readAt ? reinterpret_cast<const char*>(readAt) : ""}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return receipts;
+    }
+
+    void recordDirectMessageDelivered(int messageId, const std::string& userId) {
+        const std::string now = getCurrentTimeStr();
+        const char* sql = R"(
+            INSERT OR IGNORE INTO direct_message_receipts (message_id, user_id, delivered_at, read_at)
+            SELECT id, ?, ?, '' FROM messages
+            WHERE id = ? AND recipient_id = ? AND sender_id <> ?;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, now.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 3, messageId);
+        sqlite3_bind_text(stmt, 4, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+
+        const char* updateSql = "UPDATE direct_message_receipts SET delivered_at = ? WHERE message_id = ? AND user_id = ? AND delivered_at = '';";
+        stmt = nullptr;
+        if (sqlite3_prepare_v2(db, updateSql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 2, messageId);
+            sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    void recordGroupMessageDelivered(int messageId, const std::string& groupId, const std::string& userId) {
+        const std::string now = getCurrentTimeStr();
+        const char* sql = R"(
+            INSERT OR IGNORE INTO group_message_receipts (group_message_id, user_id, delivered_at, read_at)
+            SELECT gm.id, ?, ?, '' FROM group_messages gm
+            WHERE gm.id = ? AND gm.group_id = ? AND gm.sender_id <> ?
+              AND EXISTS (SELECT 1 FROM group_members WHERE group_id = gm.group_id AND user_id = ?)
+              AND NOT EXISTS (SELECT 1 FROM group_messages_deleted WHERE message_id = gm.id AND user_id = ?);
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, now.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 3, messageId);
+        sqlite3_bind_text(stmt, 4, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 6, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 7, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+
+        const char* updateSql = "UPDATE group_message_receipts SET delivered_at = ? WHERE group_message_id = ? AND user_id = ? AND delivered_at = '';";
+        stmt = nullptr;
+        if (sqlite3_prepare_v2(db, updateSql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 2, messageId);
+            sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    void syncPendingDeliveriesForUser(const std::string& userId) {
+        if (userId.empty()) return;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        syncPendingDeliveriesForUserLocked(userId);
+    }
+
+    bool getDirectMessageById(int messageId, Message& outMsg) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "SELECT m.id, m.conversation_id, m.sender_id, u.fullname, u.avatar, m.recipient_id, "
+                          "m.content, m.shared_post_id, m.is_revoked, m.created_at, COALESCE(m.media_type,'NONE'), "
+                          "COALESCE(m.media_url,''), COALESCE(m.reaction,''), COALESCE(m.reply_to_text,''), "
+                          "m.is_read, COALESCE(m.reply_to_id, 0) "
+                          "FROM messages m JOIN users u ON m.sender_id = u.id "
+                          "WHERE m.id = ? LIMIT 1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_int(stmt, 1, messageId);
+        bool found = false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            outMsg.id = sqlite3_column_int(stmt, 0);
+            outMsg.conversation_id = (const char*)sqlite3_column_text(stmt, 1);
+            outMsg.sender_id = (const char*)sqlite3_column_text(stmt, 2);
+            outMsg.sender_name = (const char*)sqlite3_column_text(stmt, 3);
+            outMsg.sender_avatar = sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : "";
+            outMsg.recipient_id = (const char*)sqlite3_column_text(stmt, 5);
+            outMsg.content = (const char*)sqlite3_column_text(stmt, 6);
+            outMsg.shared_post_id = sqlite3_column_text(stmt, 7) ? (const char*)sqlite3_column_text(stmt, 7) : "";
+            outMsg.is_revoked = sqlite3_column_int(stmt, 8);
+            outMsg.created_at = (const char*)sqlite3_column_text(stmt, 9);
+            outMsg.media_type = sqlite3_column_text(stmt, 10) ? (const char*)sqlite3_column_text(stmt, 10) : "NONE";
+            outMsg.media_url = sqlite3_column_text(stmt, 11) ? (const char*)sqlite3_column_text(stmt, 11) : "";
+            outMsg.reaction = sqlite3_column_text(stmt, 12) ? (const char*)sqlite3_column_text(stmt, 12) : "";
+            outMsg.reply_to_text = sqlite3_column_text(stmt, 13) ? (const char*)sqlite3_column_text(stmt, 13) : "";
+            outMsg.is_read = sqlite3_column_int(stmt, 14);
+            outMsg.reply_to_id = sqlite3_column_int(stmt, 15);
+            found = true;
+        }
+        sqlite3_finalize(stmt);
+        if (found) {
+            outMsg.receipts = getMessageReceiptDetails(outMsg.id, false);
+            outMsg.reactions = getMessageReactionSummaries(outMsg.id, false);
+        }
+        return found;
+    }
+
+    bool getGroupMessageById(int messageId, GroupMessage& outMsg) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "SELECT gm.id, gm.group_id, gm.sender_id, u.fullname, u.avatar, "
+                          "gm.content, COALESCE(gm.shared_post_id,''), gm.created_at, "
+                          "COALESCE(gm.media_type,'NONE'), COALESCE(gm.media_url,''), "
+                          "COALESCE(gm.is_revoked, 0), COALESCE(gm.reaction,''), "
+                          "COALESCE(gm.reply_to_text,''), COALESCE(gm.reply_to_id, 0) "
+                          "FROM group_messages gm JOIN users u ON gm.sender_id = u.id "
+                          "WHERE gm.id = ? LIMIT 1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_int(stmt, 1, messageId);
+        bool found = false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            outMsg.id = sqlite3_column_int(stmt, 0);
+            outMsg.group_id = (const char*)sqlite3_column_text(stmt, 1);
+            outMsg.sender_id = (const char*)sqlite3_column_text(stmt, 2);
+            outMsg.sender_name = (const char*)sqlite3_column_text(stmt, 3);
+            outMsg.sender_avatar = sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : "";
+            outMsg.content = (const char*)sqlite3_column_text(stmt, 5);
+            outMsg.shared_post_id = sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : "";
+            outMsg.created_at = (const char*)sqlite3_column_text(stmt, 7);
+            outMsg.media_type = sqlite3_column_text(stmt, 8) ? (const char*)sqlite3_column_text(stmt, 8) : "NONE";
+            outMsg.media_url = sqlite3_column_text(stmt, 9) ? (const char*)sqlite3_column_text(stmt, 9) : "";
+            outMsg.is_revoked = sqlite3_column_int(stmt, 10);
+            outMsg.reaction = sqlite3_column_text(stmt, 11) ? (const char*)sqlite3_column_text(stmt, 11) : "";
+            outMsg.reply_to_text = sqlite3_column_text(stmt, 12) ? (const char*)sqlite3_column_text(stmt, 12) : "";
+            outMsg.reply_to_id = sqlite3_column_int(stmt, 13);
+            found = true;
+        }
+        sqlite3_finalize(stmt);
+        if (found) {
+            outMsg.receipts = getMessageReceiptDetails(outMsg.id, true);
+            outMsg.reactions = getMessageReactionSummaries(outMsg.id, true);
+        }
+        return found;
+    }
+
+    bool canUserViewMessageReceipts(const std::string& userId, int messageId, bool isGroup) {
+        if (userId.empty() || messageId <= 0) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        if (isGroup) {
+            const char* sql = "SELECT 1 FROM group_messages gm JOIN group_members gmbr ON gmbr.group_id = gm.group_id WHERE gm.id = ? AND gmbr.user_id = ? LIMIT 1;";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+            sqlite3_bind_int(stmt, 1, messageId);
+            sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            bool canView = (sqlite3_step(stmt) == SQLITE_ROW);
+            sqlite3_finalize(stmt);
+            return canView;
+        } else {
+            const char* sql = "SELECT 1 FROM messages WHERE id = ? AND (sender_id = ? OR recipient_id = ?) LIMIT 1;";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+            sqlite3_bind_int(stmt, 1, messageId);
+            sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+            bool canView = (sqlite3_step(stmt) == SQLITE_ROW);
+            sqlite3_finalize(stmt);
+            return canView;
+        }
     }
 
     bool init(const std::string& dbPath = "data/social_network.db") {
@@ -55,14 +347,53 @@ public:
         sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);
 
         createTables();
-
-        const char* seed = std::getenv("SEED_DEMO_DATA");
-        
-        if (seed && std::string(seed) == "true") {
-            seedDataIfEmpty();
-        }
-        
+        seedDataIfEmpty();
+        seedCommunityGroupsIfEmpty();
+        securityBootstrapLocked();
         return true;
+    }
+
+    void seedCommunityGroupsIfEmpty() {
+        // Caller (init) đã giữ dbMutex — không lock lại để tránh deadlock
+        sqlite3_stmt* stmt = nullptr;
+        int count = 0;
+        if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM community_groups;", -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) count = sqlite3_column_int(stmt, 0);
+            sqlite3_finalize(stmt);
+        }
+        if (count > 0 || !sec::envFlag("SEED_DEMO_DATA")) return;
+
+        std::string now = getCurrentTimeStr();
+        // Nhóm mẫu
+        executeSimple("INSERT OR IGNORE INTO community_groups (id, name, description, avatar, privacy, created_by, created_at) VALUES "
+            "('CG000001', 'Lập trình C++ Việt Nam', 'Cộng đồng chia sẻ kiến thức C++, web server, SQLite và dự án mã nguồn mở.', '', 'PUBLIC', 'ACC000001', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_groups (id, name, description, avatar, privacy, created_by, created_at) VALUES "
+            "('CG000002', 'Đời sống sinh viên', 'Chia sẻ chuyện học tập, ký túc xá, việc làm thêm và các mẹo hay cho sinh viên.', '', 'PUBLIC', 'ACC000002', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_groups (id, name, description, avatar, privacy, created_by, created_at) VALUES "
+            "('CG000003', 'Thể thao & Sức khỏe', 'Chạy bộ, bóng đá, gym và lối sống lành mạnh.', '', 'PUBLIC', 'ACC000003', '" + now + "');");
+
+        // Thành viên
+        executeSimple("INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES ('CG000001', 'ACC000001', 'ADMIN', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES ('CG000001', 'ACC000002', 'MEMBER', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES ('CG000001', 'ACC000003', 'MEMBER', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES ('CG000002', 'ACC000002', 'ADMIN', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES ('CG000002', 'ACC000001', 'MEMBER', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES ('CG000002', 'ACC000004', 'MEMBER', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES ('CG000003', 'ACC000003', 'ADMIN', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES ('CG000003', 'ACC000001', 'MEMBER', '" + now + "');");
+
+        // Bài viết đã duyệt
+        executeSimple("INSERT OR IGNORE INTO community_group_posts (id, group_id, author_id, content, media_type, media_url, approval_status, created_at) VALUES "
+            "('CGP000001', 'CG000001', 'ACC000001', 'Chào mừng mọi người đến nhóm Lập trình C++! Hãy chia sẻ project và câu hỏi của bạn nhé.', 'NONE', '', 'APPROVED', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_posts (id, group_id, author_id, content, media_type, media_url, approval_status, created_at) VALUES "
+            "('CGP000002', 'CG000001', 'ACC000002', 'Mình vừa viết xong một HTTP server bằng C++17 + SQLite, performance khá ổn trên localhost.', 'NONE', '', 'APPROVED', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_posts (id, group_id, author_id, content, media_type, media_url, approval_status, created_at) VALUES "
+            "('CGP000003', 'CG000002', 'ACC000002', 'Cuối tuần này mọi người có kế hoạch gì không? Đi cafe code chung không nào?', 'NONE', '', 'APPROVED', '" + now + "');");
+        executeSimple("INSERT OR IGNORE INTO community_group_posts (id, group_id, author_id, content, media_type, media_url, approval_status, created_at) VALUES "
+            "('CGP000004', 'CG000003', 'ACC000003', 'Sáng nay chạy 5km, pace ổn. Ai cần partner chạy bộ khu Cầu Giấy inbox nhé!', 'NONE', '', 'APPROVED', '" + now + "');");
+        // Bài chờ duyệt (thành viên đăng)
+        executeSimple("INSERT OR IGNORE INTO community_group_posts (id, group_id, author_id, content, media_type, media_url, approval_status, created_at) VALUES "
+            "('CGP000005', 'CG000001', 'ACC000003', 'Có ai dùng httplib + nlohmann/json chưa? Mình đang kẹt chỗ multipart upload.', 'NONE', '', 'PENDING', '" + now + "');");
     }
 
     void close() {
@@ -80,6 +411,116 @@ private:
         if (rc != SQLITE_OK) {
             std::cerr << "SQL Error: " << (errMsg ? errMsg : "Unknown") << " in query: " << sql << std::endl;
             sqlite3_free(errMsg);
+        }
+    }
+
+    bool weakAdminPassword_ = false;
+
+    // Chạy một lần khi khởi động (đã giữ dbMutex): băm mật khẩu cũ, làm sạch dữ liệu, tạo admin an toàn
+    void securityBootstrapLocked() {
+        // 1) Băm mọi mật khẩu còn lưu dạng văn bản thường (DB cũ lưu plaintext)
+        std::vector<std::pair<std::string, std::string>> toFix;
+        {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT id, password_hash FROM users;", -1, &st, nullptr) == SQLITE_OK) {
+                while (sqlite3_step(st) == SQLITE_ROW) {
+                    const unsigned char* a = sqlite3_column_text(st, 0);
+                    const unsigned char* b = sqlite3_column_text(st, 1);
+                    const std::string id = a ? reinterpret_cast<const char*>(a) : "";
+                    const std::string pw = b ? reinterpret_cast<const char*>(b) : "";
+                    if (!sec::isHashedPassword(pw) && pw != "!") toFix.emplace_back(id, pw);
+                }
+                sqlite3_finalize(st);
+            }
+        }
+        if (!toFix.empty()) {
+            std::cout << "[Bảo mật] Đang băm " << toFix.size() << " mật khẩu lưu dạng văn bản thường (PBKDF2-SHA256)..." << std::endl;
+            sqlite3_exec(db, "BEGIN;", nullptr, nullptr, nullptr);
+            for (const auto& f : toFix) {
+                const std::string h = (f.second.empty() || f.second == "GOOGLE_AUTH") ? "!" : sec::hashPassword(f.second);
+                sqlite3_stmt* up = nullptr;
+                if (sqlite3_prepare_v2(db, "UPDATE users SET password_hash = ? WHERE id = ?;", -1, &up, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(up, 1, h.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(up, 2, f.first.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_step(up);
+                    sqlite3_finalize(up);
+                }
+            }
+            sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+        }
+
+        // 2) Làm sạch dữ liệu hồ sơ cũ có thể chứa ký tự gây XSS
+        auto strip = [](const char* col) {
+            return std::string("replace(replace(replace(replace(replace(") + col + ",'<',''),'>',''),'\"',''),'`',''),'\\','')";
+        };
+        executeSimple("UPDATE users SET fullname = " + strip("fullname") + ", hometown = " + strip("hometown") + ", school = " + strip("school") +
+                      ", workplace = " + strip("workplace") + ", residence = " + strip("residence") + ";");
+        executeSimple("UPDATE users SET avatar = '' WHERE avatar LIKE '%\"%' OR avatar LIKE '%''%' OR avatar LIKE '%<%' OR avatar LIKE '%>%' OR avatar LIKE '% %' OR lower(avatar) LIKE 'javascript:%';");
+        executeSimple("UPDATE groups SET name = " + strip("name") + ";");
+        executeSimple("UPDATE community_groups SET name = " + strip("name") + ";");
+
+        // 2b) Token admin cũ (lưu plaintext, không hết hạn) bị thu hồi hết
+        executeSimple("DELETE FROM admin_sessions WHERE expires_at IS NULL OR expires_at = 0;");
+        executeSimple("DELETE FROM admin_sessions WHERE expires_at < strftime('%s','now');");
+        executeSimple("DELETE FROM user_sessions WHERE expires_at < strftime('%s','now');");
+
+        // 3) Tài khoản admin: tạo mới nếu chưa có, đồng bộ mật khẩu từ ADMIN_PASSWORD, cảnh báo mật khẩu mặc định
+        const std::string envPw = sec::envOr("ADMIN_PASSWORD");
+        int admins = 0;
+        {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM users WHERE role = 'ADMIN';", -1, &st, nullptr) == SQLITE_OK) {
+                if (sqlite3_step(st) == SQLITE_ROW) admins = sqlite3_column_int(st, 0);
+                sqlite3_finalize(st);
+            }
+        }
+        if (admins == 0) {
+            std::string pw = envPw;
+            bool generated = false;
+            if (pw.empty()) { pw = sec::randomToken(9); generated = true; }  // 18 ký tự ngẫu nhiên
+            const std::string h = sec::hashPassword(pw);
+            const std::string now = getCurrentTimeStr();
+            const std::string tok = sec::randomToken(8);
+            sqlite3_stmt* ins = nullptr;
+            if (sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO users (id, username, email, password_hash, fullname, bio, role, status, last_active_at, created_at, user_token) "
+                                       "VALUES ('ACC000000', 'admin', 'admin@mangxahoi.vn', ?, 'Quản Trị Viên Hệ Thống', 'Ban quản trị hệ thống', 'ADMIN', 'ACTIVE', ?, ?, ?);", -1, &ins, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(ins, 1, h.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(ins, 2, now.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(ins, 3, now.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(ins, 4, tok.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_step(ins);
+                sqlite3_finalize(ins);
+            }
+            std::cout << "[Bảo mật] Đã tạo tài khoản admin (username: admin)." << std::endl;
+            if (generated) std::cout << "[Bảo mật] MẬT KHẨU ADMIN NGẪU NHIÊN (chỉ hiện 1 lần, hãy lưu lại): " << pw << std::endl;
+        } else {
+            std::vector<std::pair<std::string, std::string>> adminRows;
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT id, password_hash FROM users WHERE role = 'ADMIN';", -1, &st, nullptr) == SQLITE_OK) {
+                while (sqlite3_step(st) == SQLITE_ROW) {
+                    const unsigned char* a = sqlite3_column_text(st, 0);
+                    const unsigned char* b = sqlite3_column_text(st, 1);
+                    adminRows.emplace_back(a ? reinterpret_cast<const char*>(a) : "", b ? reinterpret_cast<const char*>(b) : "");
+                }
+                sqlite3_finalize(st);
+            }
+            for (auto& r : adminRows) {
+                if (!envPw.empty() && !sec::verifyPassword(envPw, r.second)) {
+                    const std::string h = sec::hashPassword(envPw);
+                    sqlite3_stmt* up = nullptr;
+                    if (sqlite3_prepare_v2(db, "UPDATE users SET password_hash = ? WHERE id = ?;", -1, &up, nullptr) == SQLITE_OK) {
+                        sqlite3_bind_text(up, 1, h.c_str(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(up, 2, r.first.c_str(), -1, SQLITE_TRANSIENT);
+                        sqlite3_step(up);
+                        sqlite3_finalize(up);
+                    }
+                    r.second = h;
+                    executeSimple("DELETE FROM admin_sessions;");
+                    std::cout << "[Bảo mật] Đã đồng bộ mật khẩu admin từ ADMIN_PASSWORD (các phiên admin cũ bị thu hồi)." << std::endl;
+                }
+                if (sec::verifyPassword("Admin@123", r.second)) weakAdminPassword_ = true;
+            }
+            if (weakAdminPassword_) std::cerr << "[CẢNH BÁO BẢO MẬT] Tài khoản admin đang dùng mật khẩu mặc định 'Admin@123' (công khai trong tài liệu)! Đặt ADMIN_PASSWORD trong .env." << std::endl;
         }
     }
 
@@ -102,6 +543,26 @@ private:
                 google_id TEXT DEFAULT '',
                 last_active_at TEXT DEFAULT '',
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS message_reactions (
+                message_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (message_id, user_id),
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS group_message_reactions (
+                group_message_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (group_message_id, user_id),
+                FOREIGN KEY (group_message_id) REFERENCES group_messages(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS friendships (
@@ -155,6 +616,16 @@ private:
                 FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS comment_reactions (
+                comment_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (comment_id, user_id),
+                FOREIGN KEY (comment_id) REFERENCES comments(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 conversation_id TEXT NOT NULL,
@@ -195,6 +666,26 @@ private:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
                 FOREIGN KEY (sender_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS direct_message_receipts (
+                message_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                delivered_at TEXT NOT NULL DEFAULT '',
+                read_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (message_id, user_id),
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS group_message_receipts (
+                group_message_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                delivered_at TEXT NOT NULL DEFAULT '',
+                read_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (group_message_id, user_id),
+                FOREIGN KEY (group_message_id) REFERENCES group_messages(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS notifications (
@@ -238,6 +729,12 @@ private:
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
+            CREATE INDEX IF NOT EXISTS idx_direct_receipts_message ON direct_message_receipts(message_id);
+            CREATE INDEX IF NOT EXISTS idx_direct_receipts_user ON direct_message_receipts(user_id);
+            CREATE INDEX IF NOT EXISTS idx_direct_receipts_read_at ON direct_message_receipts(read_at);
+            CREATE INDEX IF NOT EXISTS idx_group_receipts_message ON group_message_receipts(group_message_id);
+            CREATE INDEX IF NOT EXISTS idx_group_receipts_user ON group_message_receipts(user_id);
+            CREATE INDEX IF NOT EXISTS idx_group_receipts_read_at ON group_message_receipts(read_at);
             CREATE INDEX IF NOT EXISTS idx_posts_time ON posts(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_search_hist_user ON search_history(user_id, created_at DESC);
         )";
@@ -264,6 +761,16 @@ private:
         tryAlter("ALTER TABLE comments ADD COLUMN reply_to_author TEXT DEFAULT '';");
         tryAlter("ALTER TABLE reports ADD COLUMN reported_comment_id TEXT DEFAULT '';");
         tryAlter("ALTER TABLE posts ADD COLUMN title TEXT DEFAULT '';");
+        tryAlter("ALTER TABLE reports ADD COLUMN resolution_note TEXT DEFAULT '';");
+        tryAlter("ALTER TABLE reports ADD COLUMN resolved_by TEXT DEFAULT '';");
+        tryAlter("ALTER TABLE reports ADD COLUMN resolved_at TEXT DEFAULT '';");
+        tryAlter("ALTER TABLE reports ADD COLUMN category TEXT DEFAULT '';");
+        executeSimple("CREATE TABLE IF NOT EXISTS admin_sessions (token TEXT PRIMARY KEY, admin_id TEXT NOT NULL, created_at TEXT NOT NULL);");
+        tryAlter("ALTER TABLE admin_sessions ADD COLUMN expires_at INTEGER DEFAULT 0;");
+        // Phiên đăng nhập người dùng: chỉ lưu SHA-256 của token (DB bị lộ vẫn không dùng được token)
+        executeSimple("CREATE TABLE IF NOT EXISTS user_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_seen INTEGER NOT NULL, ip TEXT DEFAULT '', user_agent TEXT DEFAULT '');");
+        executeSimple("CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);");
+        tryAlter("ALTER TABLE otp_codes ADD COLUMN attempts INTEGER DEFAULT 0;");
         tryAlter("ALTER TABLE posts ADD COLUMN visibility TEXT DEFAULT 'PUBLIC';");
         tryAlter("ALTER TABLE posts ADD COLUMN category TEXT DEFAULT 'doi_song';");
         tryAlter("ALTER TABLE posts ADD COLUMN category_label TEXT DEFAULT 'Đời sống';");
@@ -274,6 +781,11 @@ private:
         tryAlter("ALTER TABLE users ADD COLUMN birthday TEXT DEFAULT '';");
         tryAlter("ALTER TABLE users ADD COLUMN residence TEXT DEFAULT '';");
         tryAlter("ALTER TABLE users ADD COLUMN user_token TEXT DEFAULT '';");
+        executeSimple(R"(
+            INSERT OR IGNORE INTO direct_message_receipts (message_id, user_id, delivered_at, read_at)
+            SELECT id, recipient_id, created_at, CASE WHEN is_read = 1 THEN created_at ELSE '' END
+            FROM messages WHERE sender_id <> recipient_id;
+        )");
         executeSimple("UPDATE users SET user_token = lower(hex(randomblob(8))) WHERE user_token IS NULL OR user_token = '';");
         // Table for chat nicknames
         executeSimple(R"(
@@ -292,6 +804,88 @@ private:
                 PRIMARY KEY(user_id, message_id)
             );
         )");
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS chat_preferences (
+                user_id TEXT NOT NULL,
+                conversation_key TEXT NOT NULL,
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                force_unread INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(user_id, conversation_key)
+            );
+        )");
+        // Chặn người dùng (giữ quan hệ bạn bè, chỉ ẩn tương tác)
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS user_blocks (
+                blocker_id TEXT NOT NULL,
+                blocked_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (blocker_id, blocked_id)
+            );
+        )");
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS admin_audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_type TEXT DEFAULT '',
+                target_id TEXT DEFAULT '',
+                detail TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+        )");
+        // Nhóm cộng đồng (khác nhóm chat)
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS community_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                avatar TEXT DEFAULT '',
+                privacy TEXT DEFAULT 'PUBLIC',
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        )");
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS community_group_members (
+                group_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT DEFAULT 'MEMBER',
+                joined_at TEXT NOT NULL,
+                PRIMARY KEY (group_id, user_id)
+            );
+        )");
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS community_group_posts (
+                id TEXT PRIMARY KEY,
+                group_id TEXT NOT NULL,
+                author_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                media_type TEXT DEFAULT 'NONE',
+                media_url TEXT DEFAULT '',
+                approval_status TEXT DEFAULT 'PENDING',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (group_id) REFERENCES community_groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (author_id) REFERENCES users(id)
+            );
+        )");
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS community_group_post_reactions (
+                post_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (post_id, user_id)
+            );
+        )");
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS community_group_post_comments (
+                id TEXT PRIMARY KEY,
+                post_id TEXT NOT NULL,
+                author_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        )");
     }
 
     void seedDataIfEmpty() {
@@ -305,7 +899,9 @@ private:
             sqlite3_finalize(stmt);
         }
 
-        if (count >= 10) return;
+        // AN TOÀN: bản cũ xoá TOÀN BỘ dữ liệu và nạp lại tài khoản demo (mật khẩu công khai) mỗi khi có < 10 user.
+        // Nay chỉ nạp demo khi DB trống hoàn toàn VÀ bật SEED_DEMO_DATA=1 (chỉ dùng khi phát triển).
+        if (count > 0 || !sec::envFlag("SEED_DEMO_DATA")) return;
 
         // Xóa bảng cũ để nạp lại đầy đủ 10 tài khoản và 10 bài đăng
         executeSimple("DELETE FROM reports;");
@@ -398,13 +994,13 @@ private:
         // 6. Bình luận mẫu
         executeSimple("INSERT INTO comments (id, post_id, author_id, content, created_at) VALUES ('CMT000001', 'POST000001', 'ACC000002', 'Giao diện web trực quan, chế độ Dark Mode xịn sò quá bạn ơi! 😍', '2026-11-04 08:45:00');");
         executeSimple("INSERT INTO comments (id, post_id, author_id, content, reply_to_id, reply_to_author, created_at) VALUES ('CMT000002', 'POST000001', 'ACC000003', 'Chuẩn luôn, chạy C++ Backend phản hồi tức thì luôn bạn ơi!', 'CMT000001', 'Phạm Hương Lan', '2026-11-04 09:05:00');");
-        executeSimple("INSERT INTO comments (id, post_id, author_id, content, created_at) VALUES ('CMT000003', 'POST000001', 'ACC000005', 'Chúc mừng team, giao diện nhìn rất hiện đại và tinh tế.', '', '', '2026-11-04 09:20:00');");
+        executeSimple("INSERT INTO comments (id, post_id, author_id, content, reply_to_id, reply_to_author, created_at) VALUES ('CMT000003', 'POST000001', 'ACC000005', 'Chúc mừng team, giao diện nhìn rất hiện đại và tinh tế.', '', '', '2026-11-04 09:20:00');");
 
-        executeSimple("INSERT INTO comments (id, post_id, author_id, content, created_at) VALUES ('CMT000004', 'POST000002', 'ACC000004', 'Quán cà phê góc phố nào thế nàng ơi, nhìn ấm cúng quá! ☕', '', '', '2026-11-04 09:30:00');");
+        executeSimple("INSERT INTO comments (id, post_id, author_id, content, reply_to_id, reply_to_author, created_at) VALUES ('CMT000004', 'POST000002', 'ACC000004', 'Quán cà phê góc phố nào thế nàng ơi, nhìn ấm cúng quá! ☕', '', '', '2026-11-04 09:30:00');");
         executeSimple("INSERT INTO comments (id, post_id, author_id, content, reply_to_id, reply_to_author, created_at) VALUES ('CMT000005', 'POST000002', 'ACC000002', 'Góc Đinh Tiên Hoàng nhìn ra hồ Hoàn Kiếm đấy cậu ơi.', 'CMT000004', 'Phạm Ngọc Anh', '2026-11-04 09:45:00');");
 
-        executeSimple("INSERT INTO comments (id, post_id, author_id, content, created_at) VALUES ('CMT000006', 'POST000003', 'ACC000001', 'Tuyệt vời bác ơi, độ phức tạp O(V + E) chạy mượt mà ngay cả với hàng triệu quan hệ!', '', '', '2026-11-04 10:35:00');");
-        executeSimple("INSERT INTO comments (id, post_id, author_id, content, created_at) VALUES ('CMT000007', 'POST000003', 'ACC000009', 'Cho xin link repo tham khảo với bro ơi, mình cũng đang nghiên cứu.', '', '', '2026-11-04 10:50:00');");
+        executeSimple("INSERT INTO comments (id, post_id, author_id, content, reply_to_id, reply_to_author, created_at) VALUES ('CMT000006', 'POST000003', 'ACC000001', 'Tuyệt vời bác ơi, độ phức tạp O(V + E) chạy mượt mà ngay cả với hàng triệu quan hệ!', '', '', '2026-11-04 10:35:00');");
+        executeSimple("INSERT INTO comments (id, post_id, author_id, content, reply_to_id, reply_to_author, created_at) VALUES ('CMT000007', 'POST000003', 'ACC000009', 'Cho xin link repo tham khảo với bro ơi, mình cũng đang nghiên cứu.', '', '', '2026-11-04 10:50:00');");
 
         // 7. Nhóm mẫu & tin nhắn nhóm
         executeSimple("INSERT INTO groups (id, name, description, created_by, created_at) VALUES ('GRP000001', 'Cộng Đồng Lập Trình C++ Việt Nam', 'Nơi giao lưu chia sẻ thuật toán và phát triển ứng dụng', 'ACC000001', '" + nowTime + "');");
@@ -553,11 +1149,12 @@ public:
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         }
+        syncPendingDeliveriesForUserLocked(userId);
     }
 
     std::string generateNewUserId() {
         std::lock_guard<std::mutex> lock(dbMutex);
-        const char* sql = "SELECT COUNT(*) FROM users;";
+        const char* sql = "SELECT COALESCE(MAX(CAST(SUBSTR(id, 4) AS INTEGER)), 0) FROM users;";
         sqlite3_stmt* stmt = nullptr;
         int count = 0;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -664,10 +1261,14 @@ public:
     }
 
     // --- OTP CODES ---
+    // OTP chỉ lưu dạng băm (gắn với email + mục đích), tối đa 5 lần thử, hiệu lực ngắn
+    static std::string otpDigest(const std::string& email, const std::string& purpose, const std::string& code) {
+        return sec::sha256Hex(email + ":" + purpose + ":" + code);
+    }
+
     bool saveOtp(const std::string& email, const std::string& code, const std::string& purpose, int expirySeconds = 300) {
         std::lock_guard<std::mutex> lock(dbMutex);
-        long long expiresAt = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count() + expirySeconds;
+        const long long expiresAt = sec::epochSeconds() + expirySeconds;
 
         const char* invalidateSql = "UPDATE otp_codes SET is_used = 1 WHERE email = ? AND purpose = ?;";
         sqlite3_stmt* invStmt = nullptr;
@@ -677,58 +1278,60 @@ public:
             sqlite3_step(invStmt);
             sqlite3_finalize(invStmt);
         }
+        // Dọn OTP cũ để bảng không phình to
+        executeSimple("DELETE FROM otp_codes WHERE is_used = 1 OR expires_at < strftime('%s','now') - 3600;");
 
-        const char* insertSql = "INSERT INTO otp_codes (email, code, purpose, expires_at, is_used) VALUES (?, ?, ?, ?, 0);";
+        const std::string digest = otpDigest(email, purpose, code);
+        const char* insertSql = "INSERT INTO otp_codes (email, code, purpose, expires_at, is_used, attempts) VALUES (?, ?, ?, ?, 0, 0);";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, insertSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-
         sqlite3_bind_text(stmt, 1, email.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 2, code.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, digest.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 3, purpose.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_int64(stmt, 4, expiresAt);
-
         int rc = sqlite3_step(stmt);
         sqlite3_finalize(stmt);
         return (rc == SQLITE_DONE);
     }
 
     bool verifyOtp(const std::string& email, const std::string& code, const std::string& purpose) {
+        if (code.size() != 6) return false;
         std::lock_guard<std::mutex> lock(dbMutex);
-        long long now = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-
-        const char* sql = "SELECT id FROM otp_codes WHERE email = ? AND code = ? AND purpose = ? AND is_used = 0 AND expires_at > ? ORDER BY id DESC LIMIT 1;";
+        const long long now = sec::epochSeconds();
+        const char* sql = "SELECT id, code, attempts FROM otp_codes WHERE email = ? AND purpose = ? AND is_used = 0 AND expires_at > ? ORDER BY id DESC LIMIT 1;";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-
         sqlite3_bind_text(stmt, 1, email.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 2, code.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 3, purpose.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_int64(stmt, 4, now);
-
-        int otpId = 0;
-        bool valid = false;
+        sqlite3_bind_text(stmt, 2, purpose.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int64(stmt, 3, now);
+        long long otpId = 0; int attempts = 0; std::string stored;
         if (sqlite3_step(stmt) == SQLITE_ROW) {
-            otpId = sqlite3_column_int(stmt, 0);
-            valid = true;
+            otpId = sqlite3_column_int64(stmt, 0);
+            const unsigned char* c = sqlite3_column_text(stmt, 1);
+            stored = c ? reinterpret_cast<const char*>(c) : "";
+            attempts = sqlite3_column_int(stmt, 2);
         }
         sqlite3_finalize(stmt);
+        if (otpId == 0) return false;
 
-        if (valid && otpId > 0) {
-            const char* updateSql = "UPDATE otp_codes SET is_used = 1 WHERE id = ?;";
-            sqlite3_stmt* uStmt = nullptr;
-            if (sqlite3_prepare_v2(db, updateSql, -1, &uStmt, nullptr) == SQLITE_OK) {
-                sqlite3_bind_int(uStmt, 1, otpId);
-                sqlite3_step(uStmt);
-                sqlite3_finalize(uStmt);
-            }
+        const bool match = attempts < 5 && sec::ctEquals(stored, otpDigest(email, purpose, code));
+        const char* upd = match ? "UPDATE otp_codes SET is_used = 1 WHERE id = ?;"
+                                : "UPDATE otp_codes SET attempts = attempts + 1, is_used = CASE WHEN attempts + 1 >= 5 THEN 1 ELSE 0 END WHERE id = ?;";
+        sqlite3_stmt* u = nullptr;
+        if (sqlite3_prepare_v2(db, upd, -1, &u, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(u, 1, otpId);
+            sqlite3_step(u);
+            sqlite3_finalize(u);
         }
-        return valid;
+        return match;
     }
 
     // --- FRIENDSHIP & REQUESTS ---
     std::string getFriendshipRelation(const std::string& myId, const std::string& targetId) {
         std::lock_guard<std::mutex> lock(dbMutex);
+        // Ưu tiên trạng thái chặn từ bảng user_blocks
+        if (isUserBlockedUnlocked(myId, targetId)) return "BLOCKED_BY_ME";
+        if (isUserBlockedUnlocked(targetId, myId)) return "BLOCKED";
         const char* fSql = "SELECT status FROM friendships WHERE user_id_1 = ? AND user_id_2 = ?;";
         sqlite3_stmt* fStmt = nullptr;
         if (sqlite3_prepare_v2(db, fSql, -1, &fStmt, nullptr) == SQLITE_OK) {
@@ -737,6 +1340,7 @@ public:
             if (sqlite3_step(fStmt) == SQLITE_ROW) {
                 std::string st = (const char*)sqlite3_column_text(fStmt, 0);
                 sqlite3_finalize(fStmt);
+                if (st == "BLOCKED") return "BLOCKED_BY_ME";
                 return st;
             }
             sqlite3_finalize(fStmt);
@@ -762,6 +1366,24 @@ public:
 
     bool sendFriendRequest(const std::string& requesterId, const std::string& receiverId) {
         std::lock_guard<std::mutex> lock(dbMutex);
+        // Không cho gửi lời mời kết bạn nếu đã chặn (hai chiều)
+        if (isUserBlockedUnlocked(requesterId, receiverId) || isUserBlockedUnlocked(receiverId, requesterId)) {
+            return false;
+        }
+        // Admin không tham gia kết bạn (cả chiều gửi và nhận)
+        auto roleOf = [this](const std::string& uid) -> std::string {
+            const char* q = "SELECT role FROM users WHERE id = ? LIMIT 1;";
+            sqlite3_stmt* s = nullptr;
+            std::string role;
+            if (sqlite3_prepare_v2(db, q, -1, &s, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(s, 1, uid.c_str(), -1, SQLITE_STATIC);
+                if (sqlite3_step(s) == SQLITE_ROW && sqlite3_column_text(s, 0))
+                    role = (const char*)sqlite3_column_text(s, 0);
+                sqlite3_finalize(s);
+            }
+            return role;
+        };
+        if (roleOf(requesterId) == "ADMIN" || roleOf(receiverId) == "ADMIN") return false;
         std::string timeStr = getCurrentTimeStr();
         const char* sql = "INSERT OR REPLACE INTO friend_requests (requester_id, receiver_id, status, created_at) VALUES (?, ?, 'PENDING', ?);";
         sqlite3_stmt* stmt = nullptr;
@@ -829,7 +1451,7 @@ public:
         std::lock_guard<std::mutex> lock(dbMutex);
         std::vector<User> list;
         const char* sql = R"(
-            SELECT u.id, u.username, u.email, u.fullname, u.avatar, u.bio, u.hometown, u.school, u.workplace, u.interests, r.created_at
+            SELECT u.id, u.username, u.email, u.fullname, u.avatar, u.bio, u.hometown, u.school, u.workplace, u.interests, r.created_at, COALESCE(u.user_token, '')
             FROM friend_requests r
             JOIN users u ON r.requester_id = u.id
             WHERE r.receiver_id = ? AND r.status = 'PENDING';
@@ -851,6 +1473,40 @@ public:
             u.workplace = sqlite3_column_text(stmt, 8) ? (const char*)sqlite3_column_text(stmt, 8) : "";
             u.interests = sqlite3_column_text(stmt, 9) ? (const char*)sqlite3_column_text(stmt, 9) : "";
             u.created_at = (const char*)sqlite3_column_text(stmt, 10);
+            u.user_token = sqlite3_column_text(stmt, 11) ? (const char*)sqlite3_column_text(stmt, 11) : "";
+            list.push_back(u);
+        }
+        sqlite3_finalize(stmt);
+        return list;
+    }
+
+    // Lời mời kết bạn mình đã gửi (outgoing)
+    std::vector<User> getSentFriendRequests(const std::string& myId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        std::vector<User> list;
+        const char* sql = R"(
+            SELECT u.id, u.username, u.email, u.fullname, u.avatar, u.bio, u.hometown, u.school, u.workplace, u.interests, r.created_at, COALESCE(u.user_token, '')
+            FROM friend_requests r
+            JOIN users u ON r.receiver_id = u.id
+            WHERE r.requester_id = ? AND r.status = 'PENDING';
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return list;
+        sqlite3_bind_text(stmt, 1, myId.c_str(), -1, SQLITE_STATIC);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            User u;
+            u.id = (const char*)sqlite3_column_text(stmt, 0);
+            u.username = (const char*)sqlite3_column_text(stmt, 1);
+            u.email = (const char*)sqlite3_column_text(stmt, 2);
+            u.fullname = (const char*)sqlite3_column_text(stmt, 3);
+            u.avatar = sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : "";
+            u.bio = sqlite3_column_text(stmt, 5) ? (const char*)sqlite3_column_text(stmt, 5) : "";
+            u.hometown = sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : "";
+            u.school = sqlite3_column_text(stmt, 7) ? (const char*)sqlite3_column_text(stmt, 7) : "";
+            u.workplace = sqlite3_column_text(stmt, 8) ? (const char*)sqlite3_column_text(stmt, 8) : "";
+            u.interests = sqlite3_column_text(stmt, 9) ? (const char*)sqlite3_column_text(stmt, 9) : "";
+            u.created_at = (const char*)sqlite3_column_text(stmt, 10);
+            u.user_token = sqlite3_column_text(stmt, 11) ? (const char*)sqlite3_column_text(stmt, 11) : "";
             list.push_back(u);
         }
         sqlite3_finalize(stmt);
@@ -876,11 +1532,18 @@ public:
         std::lock_guard<std::mutex> lock(dbMutex);
         std::string realId = resolveUserId(userId);
         std::vector<std::string> friends;
-        const char* sql = "SELECT user_id_2 FROM friendships WHERE user_id_1 = ? AND status = 'FRIEND';";
+        const char* sql = R"(
+            SELECT user_id_2 FROM friendships
+            WHERE user_id_1 = ? AND status = 'FRIEND'
+              AND user_id_2 NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
+              AND user_id_2 NOT IN (SELECT user_id_2 FROM friendships WHERE user_id_1 = ? AND status = 'BLOCKED')
+        )";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return friends;
 
         sqlite3_bind_text(stmt, 1, realId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, realId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, realId.c_str(), -1, SQLITE_STATIC);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             friends.push_back((const char*)sqlite3_column_text(stmt, 0));
         }
@@ -896,12 +1559,16 @@ public:
             SELECT u.id, u.username, u.email, u.fullname, u.avatar, u.bio, u.hometown, u.school, u.workplace, u.interests, u.role, u.status, u.last_active_at, u.created_at, u.gender, u.birthday, u.residence, u.user_token
             FROM friendships f
             JOIN users u ON f.user_id_2 = u.id
-            WHERE f.user_id_1 = ? AND f.status = 'FRIEND';
+            WHERE f.user_id_1 = ? AND f.status = 'FRIEND'
+              AND u.id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
+              AND u.id NOT IN (SELECT user_id_2 FROM friendships WHERE user_id_1 = ? AND status = 'BLOCKED')
         )";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return list;
 
         sqlite3_bind_text(stmt, 1, realId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, realId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, realId.c_str(), -1, SQLITE_STATIC);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             User u;
             u.id = (const char*)sqlite3_column_text(stmt, 0);
@@ -955,29 +1622,149 @@ public:
     }
 
     bool blockUser(const std::string& myId, const std::string& targetId) {
+        if (myId.empty() || targetId.empty() || myId == targetId) return false;
         std::lock_guard<std::mutex> lock(dbMutex);
+        // Không hủy kết bạn — chỉ ghi nhận chặn; hủy lời mời kết bạn đang chờ
         std::string timeStr = getCurrentTimeStr();
-        const char* delSql = "DELETE FROM friendships WHERE (user_id_1 = ? AND user_id_2 = ?) OR (user_id_1 = ? AND user_id_2 = ?);";
-        sqlite3_stmt* dStmt = nullptr;
-        if (sqlite3_prepare_v2(db, delSql, -1, &dStmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(dStmt, 1, myId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(dStmt, 2, targetId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(dStmt, 3, targetId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(dStmt, 4, myId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(dStmt);
-            sqlite3_finalize(dStmt);
-        }
-
-        const char* inSql = "INSERT OR REPLACE INTO friendships (user_id_1, user_id_2, status, created_at) VALUES (?, ?, 'BLOCKED', ?);";
+        const char* inSql = "INSERT OR REPLACE INTO user_blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?);";
         sqlite3_stmt* stmt = nullptr;
-        if (sqlite3_prepare_v2(db, inSql, -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, myId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, targetId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 3, timeStr.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
+        if (sqlite3_prepare_v2(db, inSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, myId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, targetId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, timeStr.c_str(), -1, SQLITE_STATIC);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        // Hủy lời mời kết bạn hai chiều (nếu còn PENDING)
+        const char* cancelReq = "DELETE FROM friend_requests WHERE (requester_id = ? AND receiver_id = ?) OR (requester_id = ? AND receiver_id = ?);";
+        sqlite3_stmt* cStmt = nullptr;
+        if (sqlite3_prepare_v2(db, cancelReq, -1, &cStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(cStmt, 1, myId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(cStmt, 2, targetId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(cStmt, 3, targetId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(cStmt, 4, myId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(cStmt);
+            sqlite3_finalize(cStmt);
+        }
+        // Đồng bộ legacy: đánh dấu BLOCKED một chiều để các chỗ cũ vẫn hiểu
+        const char* legacySql = "INSERT OR REPLACE INTO friendships (user_id_1, user_id_2, status, created_at) VALUES (?, ?, 'BLOCKED', ?);";
+        sqlite3_stmt* leg = nullptr;
+        if (sqlite3_prepare_v2(db, legacySql, -1, &leg, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(leg, 1, myId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(leg, 2, targetId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(leg, 3, timeStr.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(leg);
+            sqlite3_finalize(leg);
+        }
+        return ok;
+    }
+
+    bool unblockUser(const std::string& myId, const std::string& targetId) {
+        if (myId.empty() || targetId.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* delSql = "DELETE FROM user_blocks WHERE blocker_id = ? AND blocked_id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, delSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, myId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, targetId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+
+        // Gỡ bản ghi BLOCKED legacy; nếu trước đó là bạn bè thì khôi phục FRIEND cả 2 chiều
+        const char* delFriendBlock = "DELETE FROM friendships WHERE user_id_1 = ? AND user_id_2 = ? AND status = 'BLOCKED';";
+        sqlite3_stmt* d1 = nullptr;
+        if (sqlite3_prepare_v2(db, delFriendBlock, -1, &d1, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(d1, 1, myId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(d1, 2, targetId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(d1);
+            sqlite3_finalize(d1);
+        }
+        // Khôi phục FRIEND nếu chiều ngược còn FRIEND hoặc từng là bạn
+        const char* checkFriend = "SELECT 1 FROM friendships WHERE user_id_1 = ? AND user_id_2 = ? AND status = 'FRIEND' LIMIT 1;";
+        sqlite3_stmt* cStmt = nullptr;
+        bool otherSideFriend = false;
+        if (sqlite3_prepare_v2(db, checkFriend, -1, &cStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(cStmt, 1, targetId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(cStmt, 2, myId.c_str(), -1, SQLITE_STATIC);
+            otherSideFriend = sqlite3_step(cStmt) == SQLITE_ROW;
+            sqlite3_finalize(cStmt);
+        }
+        if (otherSideFriend) {
+            std::string timeStr = getCurrentTimeStr();
+            const char* restore = "INSERT OR REPLACE INTO friendships (user_id_1, user_id_2, status, created_at) VALUES (?, ?, 'FRIEND', ?);";
+            sqlite3_stmt* rStmt = nullptr;
+            if (sqlite3_prepare_v2(db, restore, -1, &rStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(rStmt, 1, myId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(rStmt, 2, targetId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(rStmt, 3, timeStr.c_str(), -1, SQLITE_STATIC);
+                sqlite3_step(rStmt);
+                sqlite3_finalize(rStmt);
+            }
         }
         return true;
+    }
+
+    // Phiên bản nội bộ (caller đã giữ dbMutex)
+    bool isUserBlockedUnlocked(const std::string& blockerId, const std::string& blockedId) {
+        if (blockerId.empty() || blockedId.empty()) return false;
+        const char* sql = "SELECT 1 FROM user_blocks WHERE blocker_id = ? AND blocked_id = ? LIMIT 1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            const char* leg = "SELECT 1 FROM friendships WHERE user_id_1 = ? AND user_id_2 = ? AND status = 'BLOCKED' LIMIT 1;";
+            if (sqlite3_prepare_v2(db, leg, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        }
+        sqlite3_bind_text(stmt, 1, blockerId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, blockedId.c_str(), -1, SQLITE_STATIC);
+        const bool blocked = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+        return blocked;
+    }
+
+    bool isUserBlocked(const std::string& blockerId, const std::string& blockedId) {
+        if (blockerId.empty() || blockedId.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        return isUserBlockedUnlocked(blockerId, blockedId);
+    }
+
+    // Kiểm tra chặn hai chiều: A chặn B hoặc B chặn A đều trả về true
+    bool areUsersBlockedEitherWay(const std::string& userA, const std::string& userB) {
+        if (userA.empty() || userB.empty() || userA == userB) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        return isUserBlockedUnlocked(userA, userB) || isUserBlockedUnlocked(userB, userA);
+    }
+
+    json getBlockedUsers(const std::string& myId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json arr = json::array();
+        const char* sql = R"(
+            SELECT u.id, u.fullname, u.avatar, u.user_token, b.created_at
+            FROM user_blocks b
+            JOIN users u ON u.id = b.blocked_id
+            WHERE b.blocker_id = ?
+            ORDER BY b.created_at DESC;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            // fallback legacy friendships BLOCKED
+            const char* leg = R"(
+                SELECT u.id, u.fullname, u.avatar, u.user_token, f.created_at
+                FROM friendships f JOIN users u ON u.id = f.user_id_2
+                WHERE f.user_id_1 = ? AND f.status = 'BLOCKED'
+                ORDER BY f.created_at DESC;
+            )";
+            if (sqlite3_prepare_v2(db, leg, -1, &stmt, nullptr) != SQLITE_OK) return arr;
+        }
+        sqlite3_bind_text(stmt, 1, myId.c_str(), -1, SQLITE_STATIC);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            arr.push_back({
+                {"id", (const char*)sqlite3_column_text(stmt, 0)},
+                {"name", (const char*)sqlite3_column_text(stmt, 1)},
+                {"avatar", sqlite3_column_text(stmt, 2) ? (const char*)sqlite3_column_text(stmt, 2) : ""},
+                {"user_token", sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : ""},
+                {"blocked_at", sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : ""}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return arr;
     }
 
     // --- POSTS & TOP REACTIONS (Hình 1) ---
@@ -989,6 +1776,56 @@ public:
         if (type == "SAD") return "😢";
         if (type == "ANGRY") return "😡";
         return "👍";
+    }
+
+    void populateCommentReactions(Comment& comment, const std::string& currentUserId) {
+        const char* sql = R"(
+            SELECT r.type, u.fullname
+            FROM comment_reactions r
+            JOIN users u ON u.id = r.user_id
+            WHERE r.comment_id = ?;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        std::map<std::string, std::vector<std::string>> reactionUsers;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, comment.id.c_str(), -1, SQLITE_STATIC);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const auto* typeText = sqlite3_column_text(stmt, 0);
+                const auto* nameText = sqlite3_column_text(stmt, 1);
+                if (!typeText) continue;
+                reactionUsers[(const char*)typeText].push_back(nameText ? (const char*)nameText : "");
+                ++comment.total_reactions;
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        for (const auto& entry : reactionUsers) {
+            TopReaction reaction;
+            reaction.type = entry.first;
+            reaction.icon = getReactionIcon(entry.first);
+            reaction.count = static_cast<int>(entry.second.size());
+            reaction.user_names = entry.second;
+            comment.top_reactions.push_back(reaction);
+        }
+        std::sort(comment.top_reactions.begin(), comment.top_reactions.end(),
+                  [](const TopReaction& left, const TopReaction& right) {
+                      return left.count > right.count;
+                  });
+
+        const char* myReactionSql = "SELECT type FROM comment_reactions WHERE comment_id = ? AND user_id = ?;";
+        stmt = nullptr;
+        if (sqlite3_prepare_v2(db, myReactionSql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, comment.id.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, currentUserId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_text(stmt, 0)) {
+                comment.my_reaction = (const char*)sqlite3_column_text(stmt, 0);
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        for (auto& reply : comment.replies) {
+            populateCommentReactions(reply, currentUserId);
+        }
     }
 
     void populatePostExtras(Post& p, const std::string& currentUserId) {
@@ -1034,7 +1871,7 @@ public:
         const char* cSql = R"(
             SELECT c.id, c.post_id, c.author_id,
                    COALESCE((SELECT nickname FROM user_nicknames WHERE user_id = ? AND friend_id = c.author_id AND nickname != ''), u.fullname) as author_name,
-                   u.avatar, c.content, c.reply_to_id, c.reply_to_author, c.created_at
+                   u.avatar, c.content, c.reply_to_id, c.reply_to_author, c.created_at, COALESCE(u.user_token, '')
             FROM comments c
             JOIN users u ON c.author_id = u.id
             WHERE c.post_id = ?
@@ -1056,6 +1893,7 @@ public:
                 c.reply_to_id = sqlite3_column_text(cStmt, 6) ? (const char*)sqlite3_column_text(cStmt, 6) : "";
                 c.reply_to_author = sqlite3_column_text(cStmt, 7) ? (const char*)sqlite3_column_text(cStmt, 7) : "";
                 c.created_at = (const char*)sqlite3_column_text(cStmt, 8);
+                c.author_token = sqlite3_column_text(cStmt, 9) ? (const char*)sqlite3_column_text(cStmt, 9) : "";
                 allComments.push_back(c);
             }
             sqlite3_finalize(cStmt);
@@ -1083,6 +1921,9 @@ public:
             }
         }
         p.comments = rootComments;
+        for (auto& comment : p.comments) {
+            populateCommentReactions(comment, currentUserId);
+        }
 
         // 3. Nếu là bài đăng lại (shared_post_id != ""), nạp thông tin bài viết gốc
         if (!p.shared_post_id.empty()) {
@@ -1183,6 +2024,116 @@ public:
         return result;
     }
 
+    bool setCommentReaction(const std::string& commentId, const std::string& userId, const std::string& type) {
+        static const std::set<std::string> allowedTypes = {"LIKE", "LOVE", "HAHA", "WOW", "SAD", "ANGRY"};
+        if (commentId.empty() || userId.empty() || (type != "NONE" && !allowedTypes.count(type))) return false;
+
+        std::lock_guard<std::mutex> lock(dbMutex);
+        if (type == "NONE") {
+            const char* sql = "DELETE FROM comment_reactions WHERE comment_id = ? AND user_id = ?;";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+            sqlite3_bind_text(stmt, 1, commentId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            const int rc = sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            return rc == SQLITE_DONE;
+        }
+
+        const char* sql = R"(
+            INSERT OR REPLACE INTO comment_reactions (comment_id, user_id, type, created_at)
+            SELECT ?, ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM comments WHERE id = ?);
+        )";
+        const std::string createdAt = getCurrentTimeStr();
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, commentId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, type.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, createdAt.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, commentId.c_str(), -1, SQLITE_STATIC);
+        const int rc = sqlite3_step(stmt);
+        const bool changed = rc == SQLITE_DONE && sqlite3_changes(db) > 0;
+        sqlite3_finalize(stmt);
+        return changed;
+    }
+
+    json getCommentReactionsDetail(const std::string& commentId, const std::string& myId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json counts = {{"ALL", 0}, {"LIKE", 0}, {"LOVE", 0}, {"HAHA", 0}, {"WOW", 0}, {"SAD", 0}, {"ANGRY", 0}};
+        json users = json::array();
+        const char* sql = R"(
+            SELECT r.type, u.id, u.fullname, u.avatar, u.user_token
+            FROM comment_reactions r
+            JOIN users u ON u.id = r.user_id
+            WHERE r.comment_id = ?
+            ORDER BY r.created_at DESC;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, commentId.c_str(), -1, SQLITE_STATIC);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const auto* typeText = sqlite3_column_text(stmt, 0);
+                const auto* idText = sqlite3_column_text(stmt, 1);
+                const auto* nameText = sqlite3_column_text(stmt, 2);
+                if (!typeText || !idText) continue;
+                const std::string type = (const char*)typeText;
+                const std::string userId = (const char*)idText;
+                const std::string name = nameText ? (const char*)nameText : "Người dùng";
+                const std::string avatar = sqlite3_column_text(stmt, 3)
+                    ? (const char*)sqlite3_column_text(stmt, 3) : "/img/default-avatar.svg";
+                const std::string token = sqlite3_column_text(stmt, 4)
+                    ? (const char*)sqlite3_column_text(stmt, 4) : userId;
+                counts["ALL"] = counts["ALL"].get<int>() + 1;
+                if (counts.contains(type)) counts[type] = counts[type].get<int>() + 1;
+
+                std::string relation = userId == myId ? "ME" : "NONE";
+                if (!myId.empty() && relation == "NONE") {
+                    const char* friendshipSql = R"(
+                        SELECT 1 FROM friendships
+                        WHERE status = 'FRIEND'
+                          AND ((user_id_1 = ? AND user_id_2 = ?) OR (user_id_1 = ? AND user_id_2 = ?))
+                        LIMIT 1;
+                    )";
+                    sqlite3_stmt* friendshipStmt = nullptr;
+                    if (sqlite3_prepare_v2(db, friendshipSql, -1, &friendshipStmt, nullptr) == SQLITE_OK) {
+                        sqlite3_bind_text(friendshipStmt, 1, myId.c_str(), -1, SQLITE_STATIC);
+                        sqlite3_bind_text(friendshipStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+                        sqlite3_bind_text(friendshipStmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+                        sqlite3_bind_text(friendshipStmt, 4, myId.c_str(), -1, SQLITE_STATIC);
+                        if (sqlite3_step(friendshipStmt) == SQLITE_ROW) relation = "FRIEND";
+                        sqlite3_finalize(friendshipStmt);
+                    }
+                }
+
+                users.push_back({
+                    {"type", type}, {"icon", getReactionIcon(type)}, {"user_id", userId},
+                    {"name", name}, {"avatar", avatar}, {"user_token", token}, {"relation", relation}
+                });
+            }
+            sqlite3_finalize(stmt);
+        }
+        return {{"status", "ok"}, {"counts", counts}, {"users", users}, {"total", counts["ALL"]}};
+    }
+
+    static std::vector<std::string> parseCategoryTags(const std::string& rawTags) {
+        static const std::vector<std::string> allowed = {
+            "giai_tri", "hoc_tap", "cong_nghe", "doi_song", "the_thao", "khac"
+        };
+        std::vector<std::string> tags;
+        std::stringstream stream(rawTags);
+        std::string tag;
+        while (std::getline(stream, tag, '|')) {
+            if (std::find(allowed.begin(), allowed.end(), tag) != allowed.end() &&
+                std::find(tags.begin(), tags.end(), tag) == tags.end()) {
+                tags.push_back(tag);
+            }
+        }
+        if (tags.empty()) tags.push_back("doi_song");
+        return tags;
+    }
+
     /**
      * News Feed Ranking:
      * score = wV*viral + wI*interest + wL*location + wS*school + wR*recency
@@ -1215,23 +2166,24 @@ public:
         std::map<std::string, int> categoryAffinity;
         {
             const char* aSql = R"(
-                SELECT COALESCE(p.category, 'doi_song') as cat, COUNT(*) as cnt
+                SELECT COALESCE(p.category, 'doi_song') as cat
                 FROM reactions r JOIN posts p ON r.post_id = p.id
                 WHERE r.user_id = ?
-                GROUP BY cat
                 UNION ALL
-                SELECT COALESCE(p.category, 'doi_song'), COUNT(*)
+                SELECT COALESCE(p.category, 'doi_song')
                 FROM comments c JOIN posts p ON c.post_id = p.id
                 WHERE c.author_id = ?
-                GROUP BY COALESCE(p.category, 'doi_song');
             )";
             sqlite3_stmt* aStmt = nullptr;
             if (sqlite3_prepare_v2(db, aSql, -1, &aStmt, nullptr) == SQLITE_OK) {
                 sqlite3_bind_text(aStmt, 1, currentUserId.c_str(), -1, SQLITE_STATIC);
                 sqlite3_bind_text(aStmt, 2, currentUserId.c_str(), -1, SQLITE_STATIC);
                 while (sqlite3_step(aStmt) == SQLITE_ROW) {
-                    std::string cat = sqlite3_column_text(aStmt, 0) ? (const char*)sqlite3_column_text(aStmt, 0) : "doi_song";
-                    categoryAffinity[cat] += sqlite3_column_int(aStmt, 1);
+                    std::string rawTags = sqlite3_column_text(aStmt, 0)
+                        ? (const char*)sqlite3_column_text(aStmt, 0) : "doi_song";
+                    for (const auto& tag : parseCategoryTags(rawTags)) {
+                        categoryAffinity[tag] += 1;
+                    }
                 }
                 sqlite3_finalize(aStmt);
             }
@@ -1258,6 +2210,11 @@ public:
             JOIN users u ON p.author_id = u.id
             WHERE u.status = 'ACTIVE'
               AND COALESCE(p.moderation_action, 'ALLOW') != 'BLOCK'
+              AND p.author_id NOT IN (
+                    SELECT blocked_id FROM user_blocks WHERE blocker_id = ?
+                    UNION
+                    SELECT user_id_2 FROM friendships WHERE user_id_1 = ? AND status = 'BLOCKED'
+              )
               AND (
                     p.visibility = 'PUBLIC'
                  OR p.author_id = ?
@@ -1274,11 +2231,12 @@ public:
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return candidates;
 
-        sqlite3_bind_text(stmt, 1, currentUserId.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 2, currentUserId.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 3, currentUserId.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 4, currentUserId.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 5, currentUserId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 1, currentUserId.c_str(), -1, SQLITE_STATIC); // my_reaction
+        sqlite3_bind_text(stmt, 2, currentUserId.c_str(), -1, SQLITE_STATIC); // block filter 1
+        sqlite3_bind_text(stmt, 3, currentUserId.c_str(), -1, SQLITE_STATIC); // block filter 2
+        sqlite3_bind_text(stmt, 4, currentUserId.c_str(), -1, SQLITE_STATIC); // author self
+        sqlite3_bind_text(stmt, 5, currentUserId.c_str(), -1, SQLITE_STATIC); // friends 1
+        sqlite3_bind_text(stmt, 6, currentUserId.c_str(), -1, SQLITE_STATIC); // friends 2
 
         auto now = std::chrono::system_clock::now();
         auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
@@ -1326,7 +2284,10 @@ public:
             p.title = sqlite3_column_text(stmt, 12) ? (const char*)sqlite3_column_text(stmt, 12) : "";
             p.visibility = sqlite3_column_text(stmt, 13) ? (const char*)sqlite3_column_text(stmt, 13) : "PUBLIC";
             p.author_token = sqlite3_column_text(stmt, 14) ? (const char*)sqlite3_column_text(stmt, 14) : "";
-            p.category = sqlite3_column_text(stmt, 15) ? (const char*)sqlite3_column_text(stmt, 15) : "doi_song";
+            std::string rawCategories = sqlite3_column_text(stmt, 15)
+                ? (const char*)sqlite3_column_text(stmt, 15) : "doi_song";
+            p.categories = parseCategoryTags(rawCategories);
+            p.category = p.categories.front();
             p.category_label = sqlite3_column_text(stmt, 16) ? (const char*)sqlite3_column_text(stmt, 16) : "Đời sống";
             p.moderation_status = sqlite3_column_text(stmt, 17) ? (const char*)sqlite3_column_text(stmt, 17) : "SAFE";
             p.moderation_action = sqlite3_column_text(stmt, 18) ? (const char*)sqlite3_column_text(stmt, 18) : "ALLOW";
@@ -1348,9 +2309,12 @@ public:
 
             // --- Interest (affinity chủ đề + interests text) ---
             double interestScore = 0.0;
-            auto itAff = categoryAffinity.find(p.category);
-            if (itAff != categoryAffinity.end()) {
-                interestScore = (double)itAff->second / (double)maxAffinity;
+            for (const auto& tag : p.categories) {
+                auto itAff = categoryAffinity.find(tag);
+                if (itAff != categoryAffinity.end()) {
+                    interestScore = std::max(interestScore,
+                        (double)itAff->second / (double)maxAffinity);
+                }
             }
             if (!myInterests.empty() && !p.content.empty()) {
                 std::string lowI = myInterests, lowC = p.content + " " + p.title;
@@ -1410,6 +2374,7 @@ public:
         std::map<std::string, int> authorCount;
         std::string lastAuthor;
         int lastStreak = 0;
+
         for (auto& p : candidates) {
             if ((int)ranked.size() >= offset + limit) break;
             if (authorCount[p.author_id] >= 3) continue;
@@ -1546,6 +2511,20 @@ public:
                              const std::string& modReason = "",
                              std::string* outPostId = nullptr) {
         std::lock_guard<std::mutex> lock(dbMutex);
+        // Admin không được đăng bài như người dùng thường
+        {
+            const char* q = "SELECT role FROM users WHERE id = ? LIMIT 1;";
+            sqlite3_stmt* s = nullptr;
+            if (sqlite3_prepare_v2(db, q, -1, &s, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(s, 1, authorId.c_str(), -1, SQLITE_STATIC);
+                if (sqlite3_step(s) == SQLITE_ROW && sqlite3_column_text(s, 0) &&
+                    std::string((const char*)sqlite3_column_text(s, 0)) == "ADMIN") {
+                    sqlite3_finalize(s);
+                    return false;
+                }
+                sqlite3_finalize(s);
+            }
+        }
         std::string timeStr = getCurrentTimeStr();
         long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -1713,20 +2692,200 @@ public:
         return u2 + "_" + u1;
     }
 
+    bool canAccessDirectConversation(const std::string& userId, const std::string& partnerId) {
+        if (userId.empty() || partnerId.empty() || userId == partnerId) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const std::string conversationId = getConversationId(userId, partnerId);
+        const char* sql = R"(
+            SELECT 1
+            WHERE EXISTS (
+                SELECT 1 FROM messages
+                WHERE conversation_id = ?
+                  AND ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))
+            ) OR EXISTS (
+                SELECT 1 FROM friendships
+                WHERE status = 'FRIEND'
+                  AND ((user_id_1 = ? AND user_id_2 = ?) OR (user_id_1 = ? AND user_id_2 = ?))
+            )
+            LIMIT 1;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, conversationId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, partnerId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, partnerId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 6, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 7, partnerId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 8, partnerId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 9, userId.c_str(), -1, SQLITE_STATIC);
+        const bool allowed = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+        return allowed;
+    }
+
+    bool isGroupMember(const std::string& groupId, const std::string& userId) {
+        if (groupId.empty() || userId.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1;", -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        const bool isMember = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+        return isMember;
+    }
+
+    bool markDirectMessagesRead(const std::string& userId, const std::string& partnerId,
+                                const std::vector<int>& messageIds, int& markedCount) {
+        markedCount = 0;
+        if (userId.empty() || partnerId.empty() || userId == partnerId) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const std::string conversationId = getConversationId(userId, partnerId);
+        const std::string now = getCurrentTimeStr();
+        const char* receiptSql = R"(
+            INSERT OR IGNORE INTO direct_message_receipts (message_id, user_id, delivered_at, read_at)
+            SELECT id, ?, ?, ? FROM messages
+            WHERE id = ? AND conversation_id = ? AND sender_id = ? AND recipient_id = ?;
+        )";
+        const char* updateReceiptSql = R"(
+            UPDATE direct_message_receipts
+            SET delivered_at = CASE WHEN delivered_at = '' THEN ? ELSE delivered_at END,
+                read_at = CASE WHEN read_at = '' THEN ? ELSE read_at END
+            WHERE message_id = ? AND user_id = ?
+              AND EXISTS (
+                SELECT 1 FROM messages
+                WHERE id = ? AND conversation_id = ? AND sender_id = ? AND recipient_id = ?
+              );
+        )";
+        const char* legacySql = "UPDATE messages SET is_read = 1 WHERE id = ? AND conversation_id = ? AND sender_id = ? AND recipient_id = ?;";
+        sqlite3_stmt* receiptStmt = nullptr;
+        sqlite3_stmt* updateReceiptStmt = nullptr;
+        sqlite3_stmt* legacyStmt = nullptr;
+        if (sqlite3_prepare_v2(db, receiptSql, -1, &receiptStmt, nullptr) != SQLITE_OK ||
+            sqlite3_prepare_v2(db, updateReceiptSql, -1, &updateReceiptStmt, nullptr) != SQLITE_OK ||
+            sqlite3_prepare_v2(db, legacySql, -1, &legacyStmt, nullptr) != SQLITE_OK) {
+            if (receiptStmt) sqlite3_finalize(receiptStmt);
+            if (updateReceiptStmt) sqlite3_finalize(updateReceiptStmt);
+            if (legacyStmt) sqlite3_finalize(legacyStmt);
+            return false;
+        }
+
+        for (const int messageId : messageIds) {
+            if (messageId <= 0) continue;
+            sqlite3_reset(receiptStmt);
+            sqlite3_clear_bindings(receiptStmt);
+            sqlite3_bind_text(receiptStmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(receiptStmt, 2, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(receiptStmt, 3, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(receiptStmt, 4, messageId);
+            sqlite3_bind_text(receiptStmt, 5, conversationId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(receiptStmt, 6, partnerId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(receiptStmt, 7, userId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(receiptStmt) != SQLITE_DONE) continue;
+
+            sqlite3_reset(updateReceiptStmt);
+            sqlite3_clear_bindings(updateReceiptStmt);
+            sqlite3_bind_text(updateReceiptStmt, 1, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(updateReceiptStmt, 2, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(updateReceiptStmt, 3, messageId);
+            sqlite3_bind_text(updateReceiptStmt, 4, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(updateReceiptStmt, 5, messageId);
+            sqlite3_bind_text(updateReceiptStmt, 6, conversationId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(updateReceiptStmt, 7, partnerId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(updateReceiptStmt, 8, userId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(updateReceiptStmt) != SQLITE_DONE || sqlite3_changes(db) == 0) continue;
+            ++markedCount;
+
+            sqlite3_reset(legacyStmt);
+            sqlite3_clear_bindings(legacyStmt);
+            sqlite3_bind_int(legacyStmt, 1, messageId);
+            sqlite3_bind_text(legacyStmt, 2, conversationId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(legacyStmt, 3, partnerId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(legacyStmt, 4, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(legacyStmt);
+        }
+        sqlite3_finalize(receiptStmt);
+        sqlite3_finalize(updateReceiptStmt);
+        sqlite3_finalize(legacyStmt);
+        return true;
+    }
+
+    bool markGroupMessagesRead(const std::string& groupId, const std::string& userId,
+                               const std::vector<int>& messageIds, int& markedCount) {
+        markedCount = 0;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sqlite3_stmt* memberStmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1;", -1, &memberStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(memberStmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(memberStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        const bool isMember = sqlite3_step(memberStmt) == SQLITE_ROW;
+        sqlite3_finalize(memberStmt);
+        if (!isMember) return false;
+
+        const std::string now = getCurrentTimeStr();
+        const char* insertSql = R"(
+            INSERT OR IGNORE INTO group_message_receipts (group_message_id, user_id, delivered_at, read_at)
+            SELECT gm.id, ?, ?, ? FROM group_messages gm
+            WHERE gm.id = ? AND gm.group_id = ? AND gm.sender_id <> ?
+              AND EXISTS (SELECT 1 FROM group_members WHERE group_id = gm.group_id AND user_id = ?);
+        )";
+        const char* updateSql = R"(
+            UPDATE group_message_receipts
+            SET delivered_at = CASE WHEN delivered_at = '' THEN ? ELSE delivered_at END,
+                read_at = CASE WHEN read_at = '' THEN ? ELSE read_at END
+            WHERE group_message_id = ? AND user_id = ?
+              AND EXISTS (
+                SELECT 1 FROM group_messages gm
+                JOIN group_members gmbr ON gmbr.group_id = gm.group_id AND gmbr.user_id = ?
+                WHERE gm.id = ? AND gm.group_id = ? AND gm.sender_id <> ?
+              );
+        )";
+        sqlite3_stmt* insertStmt = nullptr;
+        sqlite3_stmt* updateStmt = nullptr;
+        if (sqlite3_prepare_v2(db, insertSql, -1, &insertStmt, nullptr) != SQLITE_OK ||
+            sqlite3_prepare_v2(db, updateSql, -1, &updateStmt, nullptr) != SQLITE_OK) {
+            if (insertStmt) sqlite3_finalize(insertStmt);
+            if (updateStmt) sqlite3_finalize(updateStmt);
+            return false;
+        }
+
+        for (const int messageId : messageIds) {
+            if (messageId <= 0) continue;
+            sqlite3_reset(insertStmt);
+            sqlite3_clear_bindings(insertStmt);
+            sqlite3_bind_text(insertStmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(insertStmt, 2, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(insertStmt, 3, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(insertStmt, 4, messageId);
+            sqlite3_bind_text(insertStmt, 5, groupId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(insertStmt, 6, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(insertStmt, 7, userId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(insertStmt) != SQLITE_DONE) continue;
+
+            sqlite3_reset(updateStmt);
+            sqlite3_clear_bindings(updateStmt);
+            sqlite3_bind_text(updateStmt, 1, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(updateStmt, 2, now.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(updateStmt, 3, messageId);
+            sqlite3_bind_text(updateStmt, 4, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(updateStmt, 5, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(updateStmt, 6, messageId);
+            sqlite3_bind_text(updateStmt, 7, groupId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(updateStmt, 8, userId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(updateStmt) == SQLITE_DONE && sqlite3_changes(db) > 0) ++markedCount;
+        }
+        sqlite3_finalize(insertStmt);
+        sqlite3_finalize(updateStmt);
+        return true;
+    }
+
     std::vector<Message> getPaginatedMessages(const std::string& user1, const std::string& user2, int beforeId, int limit, bool& hasMore) {
         std::lock_guard<std::mutex> lock(dbMutex);
         std::string convId = getConversationId(user1, user2);
         std::vector<Message> messages;
         hasMore = false;
-
-        const char* readSql = "UPDATE messages SET is_read = 1 WHERE conversation_id = ? AND recipient_id = ?;";
-        sqlite3_stmt* rdStmt = nullptr;
-        if (sqlite3_prepare_v2(db, readSql, -1, &rdStmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(rdStmt, 1, convId.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(rdStmt, 2, user1.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(rdStmt);
-            sqlite3_finalize(rdStmt);
-        }
 
         std::string sql;
         if (beforeId > 0) {
@@ -1786,6 +2945,14 @@ public:
             }
         }
 
+        for (auto& message : messages) {
+            if (message.recipient_id == user1 && message.sender_id != user1) {
+                recordDirectMessageDelivered(message.id, user1);
+            }
+            message.receipts = getMessageReceiptDetails(message.id, false);
+            message.reactions = getMessageReactionSummaries(message.id, false);
+        }
+
         std::vector<Message> chronological;
         for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
             chronological.push_back(*it);
@@ -1798,6 +2965,10 @@ public:
                      const std::string& mediaType = "NONE", const std::string& mediaUrl = "",
                      const std::string& replyToText = "", int replyToId = 0) {
         std::lock_guard<std::mutex> lock(dbMutex);
+        // Không cho gửi tin nếu một trong hai bên đã chặn bên kia
+        if (isUserBlockedUnlocked(senderId, recipientId) || isUserBlockedUnlocked(recipientId, senderId)) {
+            return false;
+        }
         std::string convId = getConversationId(senderId, recipientId);
         std::string timeStr = getCurrentTimeStr();
 
@@ -1833,9 +3004,10 @@ public:
             outMsg.reaction = "";
             outMsg.is_revoked = 0;
             outMsg.created_at = timeStr;
-            outMsg.reaction = "";
-            outMsg.is_revoked = 0;
-            outMsg.created_at = timeStr;
+            if (PresenceRegistry::instance().isOnline(recipientId)) {
+                recordDirectMessageDelivered(outMsg.id, recipientId);
+            }
+            outMsg.receipts = getMessageReceiptDetails(outMsg.id, false);
             return true;
         }
         return false;
@@ -1991,27 +3163,122 @@ public:
         return (rc == SQLITE_DONE);
     }
 
+    bool setConversationArchived(const std::string& userId, const std::string& conversationId, bool isGroup, bool archived) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const std::string key = (isGroup ? "G:" : "D:") + (isGroup ? conversationId : getConversationId(userId, conversationId));
+        const char* sql = R"(
+            INSERT INTO chat_preferences (user_id, conversation_key, is_archived)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, conversation_key) DO UPDATE SET is_archived = excluded.is_archived;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, key.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 3, archived ? 1 : 0);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool setConversationForcedUnread(const std::string& userId, const std::string& conversationId, bool isGroup, bool unread) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const std::string key = (isGroup ? "G:" : "D:") + (isGroup ? conversationId : getConversationId(userId, conversationId));
+        const char* sql = R"(
+            INSERT INTO chat_preferences (user_id, conversation_key, force_unread)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, conversation_key) DO UPDATE SET force_unread = excluded.force_unread;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, key.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 3, unread ? 1 : 0);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool isConversationArchived(const std::string& userId, const std::string& conversationId, bool isGroup) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const std::string key = (isGroup ? "G:" : "D:") + (isGroup ? conversationId : getConversationId(userId, conversationId));
+        const char* sql = "SELECT is_archived FROM chat_preferences WHERE user_id = ? AND conversation_key = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, key.c_str(), -1, SQLITE_STATIC);
+        const bool archived = sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) != 0;
+        sqlite3_finalize(stmt);
+        return archived;
+    }
+
+    int getGroupUnreadCount(const std::string& groupId, const std::string& userId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = R"(
+            SELECT COUNT(*) FROM group_messages gm
+            WHERE gm.group_id = ?
+              AND gm.sender_id != ?
+              AND COALESCE(gm.is_revoked, 0) = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM group_messages_deleted d
+                  WHERE d.message_id = gm.id AND d.user_id = ?
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM group_message_receipts r
+                  WHERE r.group_message_id = gm.id AND r.user_id = ? AND r.read_at != ''
+              );
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+        sqlite3_bind_text(stmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, userId.c_str(), -1, SQLITE_STATIC);
+        int count = 0;
+        if (sqlite3_step(stmt) == SQLITE_ROW) count = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+        return count;
+    }
+
+    bool isConversationForcedUnread(const std::string& userId, const std::string& conversationId, bool isGroup) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const std::string key = (isGroup ? "G:" : "D:") + (isGroup ? conversationId : getConversationId(userId, conversationId));
+        const char* sql = "SELECT force_unread FROM chat_preferences WHERE user_id = ? AND conversation_key = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, key.c_str(), -1, SQLITE_STATIC);
+        const bool unread = sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) != 0;
+        sqlite3_finalize(stmt);
+        return unread;
+    }
+
     json getFriendsWithLastMessage(const std::string& myId) {
         std::lock_guard<std::mutex> lock(dbMutex);
+        syncPendingDeliveriesForUserLocked(myId);
         json arr = json::array();
 
         const char* sql = R"(
             SELECT u.id, u.fullname, u.avatar, u.last_active_at, u.user_token,
-                   (SELECT CASE WHEN m.is_revoked = 1 THEN 'Tin nhắn đã được thu hồi' ELSE m.content END FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ? THEN u.id||'_'||? ELSE ?||'_'||u.id END) ORDER BY m.id DESC LIMIT 1) as last_msg,
-                   (SELECT m.created_at FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ? THEN u.id||'_'||? ELSE ?||'_'||u.id END) ORDER BY m.id DESC LIMIT 1) as last_msg_time,
-                   (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ? THEN u.id||'_'||? ELSE ?||'_'||u.id END) AND m.recipient_id = ? AND m.is_read = 0) as unread_count,
-                   (SELECT nickname FROM user_nicknames WHERE user_id = ? AND friend_id = u.id) as nickname
+                   (SELECT CASE WHEN m.is_revoked = 1 THEN 'Tin nhắn đã được thu hồi' ELSE m.content END FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ?1 THEN u.id||'_'||?1 ELSE ?1||'_'||u.id END) ORDER BY m.id DESC LIMIT 1) as last_msg,
+                   (SELECT m.created_at FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ?1 THEN u.id||'_'||?1 ELSE ?1||'_'||u.id END) ORDER BY m.id DESC LIMIT 1) as last_msg_time,
+                   (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ?1 THEN u.id||'_'||?1 ELSE ?1||'_'||u.id END) AND m.recipient_id = ?1 AND m.is_read = 0) as unread_count,
+                   (SELECT nickname FROM user_nicknames WHERE user_id = ?1 AND friend_id = u.id) as nickname,
+                   (SELECT m.sender_id FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ?1 THEN u.id||'_'||?1 ELSE ?1||'_'||u.id END) ORDER BY m.id DESC LIMIT 1) as last_sender_id,
+                   (SELECT m.is_read FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ?1 THEN u.id||'_'||?1 ELSE ?1||'_'||u.id END) ORDER BY m.id DESC LIMIT 1) as last_message_read,
+                   COALESCE(cp.is_archived, 0) as is_archived,
+                   COALESCE(cp.force_unread, 0) as force_unread,
+                   (SELECT COALESCE(m.media_type, 'NONE') FROM messages m WHERE m.conversation_id = (CASE WHEN u.id < ?1 THEN u.id||'_'||?1 ELSE ?1||'_'||u.id END) ORDER BY m.id DESC LIMIT 1) as last_message_media_type
             FROM friendships f
             JOIN users u ON f.user_id_2 = u.id
-            WHERE f.user_id_1 = ? AND f.status = 'FRIEND' AND u.role != 'ADMIN'
+            LEFT JOIN chat_preferences cp ON cp.user_id = ?1 AND cp.conversation_key = 'D:' || (CASE WHEN u.id < ?1 THEN u.id||'_'||?1 ELSE ?1||'_'||u.id END)
+            WHERE f.user_id_1 = ?1 AND f.status = 'FRIEND' AND u.role != 'ADMIN'
             ORDER BY last_msg_time DESC NULLS LAST;
         )";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return arr;
 
-        for (int i = 1; i <= 12; i++) {
-            sqlite3_bind_text(stmt, i, myId.c_str(), -1, SQLITE_STATIC);
-        }
+        sqlite3_bind_text(stmt, 1, myId.c_str(), -1, SQLITE_STATIC);
 
         auto now = std::chrono::system_clock::now();
         auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
@@ -2024,21 +3291,13 @@ public:
             std::string utoken = sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : fid;
             std::string lastMsg = sqlite3_column_text(stmt, 5) ? (const char*)sqlite3_column_text(stmt, 5) : "Chưa có tin nhắn";
             std::string lastMsgTime = sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : "";
-            bool isUnread = sqlite3_column_int(stmt, 7) > 0;
+            bool isUnread = sqlite3_column_int(stmt, 7) > 0 || sqlite3_column_int(stmt, 12) != 0;
             std::string nickname = sqlite3_column_text(stmt, 8) ? (const char*)sqlite3_column_text(stmt, 8) : "";
+            std::string lastSenderId = sqlite3_column_text(stmt, 9) ? (const char*)sqlite3_column_text(stmt, 9) : "";
+            bool lastMessageRead = sqlite3_column_int(stmt, 10) != 0;
+            bool isArchived = sqlite3_column_int(stmt, 11) != 0;
 
-            bool isOnline = false;
-            if (!lastActive.empty()) {
-                std::tm t = {};
-                t.tm_isdst = -1;
-                std::istringstream ss(lastActive);
-                ss >> std::get_time(&t, "%Y-%m-%d %H:%M:%S");
-                if (!ss.fail()) {
-                    t.tm_isdst = -1;
-                    auto activeTime = std::mktime(&t);
-                    if (std::abs(nowSec - activeTime) <= 300) isOnline = true; // 5 phút (300 giây)
-                }
-            }
+            bool isOnline = PresenceRegistry::instance().isOnline(fid);
 
             arr.push_back({
                 {"id", fid},
@@ -2051,7 +3310,68 @@ public:
                 {"last_active_at", lastActive},
                 {"last_message", lastMsg},
                 {"last_message_time", lastMsgTime},
-                {"is_unread", isUnread}
+                {"is_unread", isUnread},
+                {"last_message_is_mine", lastSenderId == myId},
+                {"last_message_sender_id", lastSenderId},
+                {"is_seen_by_partner", lastSenderId == myId && lastMessageRead},
+                {"last_message_media_type", sqlite3_column_text(stmt, 13) ? (const char*)sqlite3_column_text(stmt, 13) : "NONE"},
+                {"is_archived", isArchived}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return arr;
+    }
+
+    json getPendingMessageContacts(const std::string& myId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json arr = json::array();
+        const char* sql = R"(
+            SELECT u.id, u.fullname, u.avatar, u.user_token,
+                   (SELECT CASE WHEN m.is_revoked = 1 THEN 'Tin nhắn đã được thu hồi' ELSE m.content END
+                    FROM messages m
+                    WHERE m.sender_id = u.id AND m.recipient_id = ?1
+                    ORDER BY m.id DESC LIMIT 1) AS last_msg,
+                   (SELECT m.created_at FROM messages m
+                    WHERE m.sender_id = u.id AND m.recipient_id = ?1
+                    ORDER BY m.id DESC LIMIT 1) AS last_msg_time,
+                   (SELECT COALESCE(m.media_type, 'NONE') FROM messages m
+                    WHERE m.sender_id = u.id AND m.recipient_id = ?1
+                    ORDER BY m.id DESC LIMIT 1) AS last_media_type,
+                   (SELECT COUNT(*) FROM messages m
+                    WHERE m.sender_id = u.id AND m.recipient_id = ?1 AND m.is_read = 0) AS unread_count
+            FROM users u
+            WHERE u.id != ?1 AND u.role != 'ADMIN'
+              AND EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = u.id AND m.recipient_id = ?1)
+              AND NOT EXISTS (
+                  SELECT 1 FROM friendships f
+                  WHERE ((f.user_id_1 = ?1 AND f.user_id_2 = u.id)
+                      OR (f.user_id_1 = u.id AND f.user_id_2 = ?1))
+                    AND f.status IN ('FRIEND', 'BLOCKED')
+              )
+            ORDER BY (
+                SELECT MAX(m.id) FROM messages m
+                WHERE m.sender_id = u.id AND m.recipient_id = ?1
+            ) DESC;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return arr;
+        sqlite3_bind_text(stmt, 1, myId.c_str(), -1, SQLITE_STATIC);
+
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const auto textColumn = [stmt](int column, const std::string& fallback = "") -> std::string {
+                const unsigned char* text = sqlite3_column_text(stmt, column);
+                return text ? reinterpret_cast<const char*>(text) : fallback;
+            };
+            const std::string userId = textColumn(0);
+            arr.push_back({
+                {"id", userId},
+                {"name", textColumn(1, "Người dùng")},
+                {"avatar", textColumn(2, "/img/default-avatar.svg")},
+                {"user_token", textColumn(3, userId)},
+                {"last_message", textColumn(4)},
+                {"last_message_time", textColumn(5)},
+                {"last_message_media_type", textColumn(6, "NONE")},
+                {"is_unread", sqlite3_column_int(stmt, 7) > 0}
             });
         }
         sqlite3_finalize(stmt);
@@ -2080,10 +3400,33 @@ public:
         sqlite3_finalize(stmt);
 
         if (rc == SQLITE_DONE) {
-            executeSimple("INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES ('" + groupId + "', '" + createdBy + "', 'ADMIN', '" + timeStr + "');");
+            // BẢO MẬT: bản cũ ghép chuỗi mid (do client gửi) vào SQL chạy bằng sqlite3_exec -> SQL injection
+            // (ví dụ chèn thêm UPDATE users SET role='ADMIN'...). Nay dùng prepared statement + kiểm tra user tồn tại.
+            auto addMember = [&](const std::string& uid, const char* role, bool requireExists) {
+                const char* msql = requireExists
+                    ? "INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) SELECT ?, id, ?, ? FROM users WHERE id = ? AND role != 'ADMIN';"
+                    : "INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?);";
+                sqlite3_stmt* ms = nullptr;
+                if (sqlite3_prepare_v2(db, msql, -1, &ms, nullptr) != SQLITE_OK) return;
+                sqlite3_bind_text(ms, 1, groupId.c_str(), -1, SQLITE_STATIC);
+                if (requireExists) {
+                    sqlite3_bind_text(ms, 2, role, -1, SQLITE_STATIC);
+                    sqlite3_bind_text(ms, 3, timeStr.c_str(), -1, SQLITE_STATIC);
+                    sqlite3_bind_text(ms, 4, uid.c_str(), -1, SQLITE_STATIC);
+                } else {
+                    sqlite3_bind_text(ms, 2, uid.c_str(), -1, SQLITE_STATIC);
+                    sqlite3_bind_text(ms, 3, role, -1, SQLITE_STATIC);
+                    sqlite3_bind_text(ms, 4, timeStr.c_str(), -1, SQLITE_STATIC);
+                }
+                sqlite3_step(ms);
+                sqlite3_finalize(ms);
+            };
+            addMember(createdBy, "ADMIN", false);
+            size_t added = 0;
             for (const auto& mid : memberIds) {
                 if (mid == createdBy) continue;
-                executeSimple("INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES ('" + groupId + "', '" + mid + "', 'MEMBER', '" + timeStr + "');");
+                if (++added > 200) break;  // giới hạn số thành viên khi tạo nhóm
+                addMember(mid, "MEMBER", true);
             }
 
             outGroup.id = groupId;
@@ -2100,15 +3443,35 @@ public:
 
     std::vector<Group> getUserGroups(const std::string& userId) {
         std::lock_guard<std::mutex> lock(dbMutex);
+        syncPendingDeliveriesForUserLocked(userId);
         std::vector<Group> groups;
         const char* sql = R"(
             SELECT g.id, g.name, g.description, g.avatar, g.created_by, g.created_at,
                    (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) as m_count,
-                   (SELECT CASE WHEN gm2.is_revoked = 1 THEN 'Tin nhắn đã được thu hồi' ELSE gm2.content END FROM group_messages gm2 WHERE gm2.group_id = g.id ORDER BY gm2.id DESC LIMIT 1) as last_msg,
-                   (SELECT gm2.created_at FROM group_messages gm2 WHERE gm2.group_id = g.id ORDER BY gm2.id DESC LIMIT 1) as last_msg_time
+                   (SELECT CASE WHEN gm2.is_revoked = 1 THEN 'Tin nhắn đã được thu hồi' ELSE gm2.content END
+                    FROM group_messages gm2
+                    WHERE gm2.group_id = g.id
+                      AND NOT EXISTS (SELECT 1 FROM group_messages_deleted deleted WHERE deleted.user_id = ?1 AND deleted.message_id = gm2.id)
+                    ORDER BY gm2.id DESC LIMIT 1) as last_msg,
+                   (SELECT gm2.created_at FROM group_messages gm2
+                    WHERE gm2.group_id = g.id
+                      AND NOT EXISTS (SELECT 1 FROM group_messages_deleted deleted WHERE deleted.user_id = ?1 AND deleted.message_id = gm2.id)
+                    ORDER BY gm2.id DESC LIMIT 1) as last_msg_time,
+                   (SELECT u2.fullname FROM group_messages gm2 JOIN users u2 ON u2.id = gm2.sender_id
+                    WHERE gm2.group_id = g.id
+                      AND NOT EXISTS (SELECT 1 FROM group_messages_deleted deleted WHERE deleted.user_id = ?1 AND deleted.message_id = gm2.id)
+                    ORDER BY gm2.id DESC LIMIT 1) as last_sender_name,
+                   (SELECT gm2.sender_id FROM group_messages gm2
+                    WHERE gm2.group_id = g.id
+                      AND NOT EXISTS (SELECT 1 FROM group_messages_deleted deleted WHERE deleted.user_id = ?1 AND deleted.message_id = gm2.id)
+                    ORDER BY gm2.id DESC LIMIT 1) as last_sender_id,
+                   (SELECT COALESCE(gm2.media_type, 'NONE') FROM group_messages gm2
+                    WHERE gm2.group_id = g.id
+                      AND NOT EXISTS (SELECT 1 FROM group_messages_deleted deleted WHERE deleted.user_id = ?1 AND deleted.message_id = gm2.id)
+                    ORDER BY gm2.id DESC LIMIT 1) as last_media_type
             FROM groups g
             JOIN group_members gm ON g.id = gm.group_id
-            WHERE gm.user_id = ?
+            WHERE gm.user_id = ?1
             ORDER BY last_msg_time DESC;
         )";
         sqlite3_stmt* stmt = nullptr;
@@ -2126,6 +3489,9 @@ public:
             g.member_count = sqlite3_column_int(stmt, 6);
             g.last_message = sqlite3_column_text(stmt, 7) ? (const char*)sqlite3_column_text(stmt, 7) : "Nhóm chat";
             g.last_message_time = sqlite3_column_text(stmt, 8) ? (const char*)sqlite3_column_text(stmt, 8) : g.created_at;
+            g.last_message_sender = sqlite3_column_text(stmt, 9) ? (const char*)sqlite3_column_text(stmt, 9) : "";
+            g.last_message_sender_id = sqlite3_column_text(stmt, 10) ? (const char*)sqlite3_column_text(stmt, 10) : "";
+            g.last_message_media_type = sqlite3_column_text(stmt, 11) ? (const char*)sqlite3_column_text(stmt, 11) : "NONE";
             groups.push_back(g);
         }
         sqlite3_finalize(stmt);
@@ -2176,6 +3542,92 @@ public:
         int rc = sqlite3_step(stmt);
         sqlite3_finalize(stmt);
         return (rc == SQLITE_DONE);
+    }
+
+    bool addGroupMembers(const std::string& groupId, const std::vector<std::string>& userIds,
+                        const std::string& requesterId, std::vector<std::string>& addedNames) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        addedNames.clear();
+        if (groupId.empty() || requesterId.empty() || userIds.empty()) return false;
+
+        sqlite3_stmt* memberStmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?;", -1, &memberStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(memberStmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(memberStmt, 2, requesterId.c_str(), -1, SQLITE_STATIC);
+        const bool requesterIsMember = sqlite3_step(memberStmt) == SQLITE_ROW;
+        sqlite3_finalize(memberStmt);
+        if (!requesterIsMember) return false;
+
+        char* errorMessage = nullptr;
+        if (sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, &errorMessage) != SQLITE_OK) {
+            sqlite3_free(errorMessage);
+            return false;
+        }
+
+        bool ok = true;
+        for (const auto& userId : userIds) {
+            if (userId.empty() || userId == requesterId) continue;
+
+            sqlite3_stmt* friendshipStmt = nullptr;
+            const char* friendshipSql = R"(
+                SELECT 1 FROM friendships
+                WHERE status = 'FRIEND'
+                  AND ((user_id_1 = ? AND user_id_2 = ?) OR (user_id_1 = ? AND user_id_2 = ?))
+                LIMIT 1;
+            )";
+            if (sqlite3_prepare_v2(db, friendshipSql, -1, &friendshipStmt, nullptr) != SQLITE_OK) {
+                ok = false;
+                break;
+            }
+            sqlite3_bind_text(friendshipStmt, 1, requesterId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(friendshipStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(friendshipStmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(friendshipStmt, 4, requesterId.c_str(), -1, SQLITE_STATIC);
+            const bool areFriends = sqlite3_step(friendshipStmt) == SQLITE_ROW;
+            sqlite3_finalize(friendshipStmt);
+            if (!areFriends) {
+                ok = false;
+                break;
+            }
+
+            sqlite3_stmt* userStmt = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT fullname FROM users WHERE id = ?;", -1, &userStmt, nullptr) != SQLITE_OK) {
+                ok = false;
+                break;
+            }
+            sqlite3_bind_text(userStmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(userStmt) != SQLITE_ROW) {
+                sqlite3_finalize(userStmt);
+                ok = false;
+                break;
+            }
+            const unsigned char* nameText = sqlite3_column_text(userStmt, 0);
+            const std::string name = nameText ? reinterpret_cast<const char*>(nameText) : "";
+            sqlite3_finalize(userStmt);
+
+            sqlite3_stmt* insertStmt = nullptr;
+            const char* insertSql = "INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, 'MEMBER', ?);";
+            if (sqlite3_prepare_v2(db, insertSql, -1, &insertStmt, nullptr) != SQLITE_OK) {
+                ok = false;
+                break;
+            }
+            const std::string joinedAt = getCurrentTimeStr();
+            sqlite3_bind_text(insertStmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(insertStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(insertStmt, 3, joinedAt.c_str(), -1, SQLITE_STATIC);
+            ok = sqlite3_step(insertStmt) == SQLITE_DONE;
+            sqlite3_finalize(insertStmt);
+            if (!ok) break;
+            if (sqlite3_changes(db) > 0) addedNames.push_back(name);
+        }
+
+        if (ok && sqlite3_exec(db, "COMMIT;", nullptr, nullptr, &errorMessage) == SQLITE_OK) {
+            return !addedNames.empty();
+        }
+        sqlite3_free(errorMessage);
+        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+        addedNames.clear();
+        return false;
     }
 
     bool removeGroupMember(const std::string& groupId, const std::string& userId, const std::string& requesterId) {
@@ -2293,6 +3745,30 @@ public:
         return (rc == SQLITE_DONE);
     }
 
+    bool clearGroupConversationForUser(const std::string& groupId, const std::string& userId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* memberSql = "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?;";
+        sqlite3_stmt* memberStmt = nullptr;
+        if (sqlite3_prepare_v2(db, memberSql, -1, &memberStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(memberStmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(memberStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        const bool isMember = sqlite3_step(memberStmt) == SQLITE_ROW;
+        sqlite3_finalize(memberStmt);
+        if (!isMember) return false;
+
+        const char* sql = R"(
+            INSERT OR IGNORE INTO group_messages_deleted (user_id, message_id)
+            SELECT ?, id FROM group_messages WHERE group_id = ?;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, groupId.c_str(), -1, SQLITE_STATIC);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
     bool sendGroupMessage(const std::string& groupId, const std::string& senderId, const std::string& content,
                           const std::string& sharedPostId, GroupMessage& outMsg,
                           const std::string& mediaType = "NONE", const std::string& mediaUrl = "",
@@ -2328,6 +3804,25 @@ public:
             outMsg.reply_to_id = replyToId;
             outMsg.reaction = "";
             outMsg.created_at = timeStr;
+
+            // Đánh dấu đã nhận ngay cho các thành viên trong nhóm đang online
+            sqlite3_stmt* mStmt = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT user_id FROM group_members WHERE group_id = ? AND user_id <> ?;", -1, &mStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(mStmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(mStmt, 2, senderId.c_str(), -1, SQLITE_STATIC);
+                std::vector<std::string> onlineMembers;
+                while (sqlite3_step(mStmt) == SQLITE_ROW) {
+                    const char* mid = (const char*)sqlite3_column_text(mStmt, 0);
+                    if (mid && PresenceRegistry::instance().isOnline(mid)) {
+                        onlineMembers.push_back(mid);
+                    }
+                }
+                sqlite3_finalize(mStmt);
+                for (const auto& mid : onlineMembers) {
+                    recordGroupMessageDelivered(outMsg.id, groupId, mid);
+                }
+            }
+            outMsg.receipts = getMessageReceiptDetails(outMsg.id, true);
             return true;
         }
         return false;
@@ -2385,6 +3880,14 @@ public:
         }
         sqlite3_finalize(stmt);
 
+        for (auto& message : list) {
+            if (!viewerId.empty() && message.sender_id != viewerId) {
+                recordGroupMessageDelivered(message.id, groupId, viewerId);
+            }
+            message.receipts = getMessageReceiptDetails(message.id, true);
+            message.reactions = getMessageReactionSummaries(message.id, true);
+        }
+
         std::vector<GroupMessage> chronological;
         for (auto it = list.rbegin(); it != list.rend(); ++it) {
             chronological.push_back(*it);
@@ -2412,16 +3915,19 @@ public:
         std::lock_guard<std::mutex> lock(dbMutex);
         json arr = json::array();
         const char* sql = R"(
-            SELECT u.id, u.fullname, u.avatar, u.user_token
+            SELECT DISTINCT u.id, u.fullname, u.avatar, u.user_token
             FROM friendships f
-            JOIN users u ON f.user_id_2 = u.id
-            WHERE f.user_id_1 = ? AND f.status = 'FRIEND'
+            JOIN users u ON u.id = CASE WHEN f.user_id_1 = ? THEN f.user_id_2 ELSE f.user_id_1 END
+            WHERE f.status = 'FRIEND'
+              AND (f.user_id_1 = ? OR f.user_id_2 = ?)
               AND u.id NOT IN (SELECT user_id FROM group_members WHERE group_id = ?);
         )";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return arr;
         sqlite3_bind_text(stmt, 1, myId.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 2, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, myId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, myId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, groupId.c_str(), -1, SQLITE_STATIC);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             std::string uid = (const char*)sqlite3_column_text(stmt, 0);
             std::string fname = (const char*)sqlite3_column_text(stmt, 1);
@@ -2453,7 +3959,7 @@ public:
         }
     }
 
-    std::vector<Notification> getUserNotifications(const std::string& userId) {
+    std::vector<Notification> getUserNotifications(const std::string& userId, int limit = 15, int offset = 0) {
         std::lock_guard<std::mutex> lock(dbMutex);
         std::vector<Notification> list;
         const char* sql = R"(
@@ -2461,12 +3967,14 @@ public:
             FROM notifications n
             JOIN users u ON n.actor_id = u.id
             WHERE n.user_id = ?
-            ORDER BY n.id DESC LIMIT 20;
+            ORDER BY n.id DESC LIMIT ? OFFSET ?;
         )";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return list;
 
         sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 2, std::max(1, limit));
+        sqlite3_bind_int(stmt, 3, std::max(0, offset));
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             Notification n;
             n.id = sqlite3_column_int(stmt, 0);
@@ -2483,6 +3991,30 @@ public:
         }
         sqlite3_finalize(stmt);
         return list;
+    }
+
+    int getUnreadNotificationCount(const std::string& userId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        int count = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int(stmt, 0) : 0;
+        sqlite3_finalize(stmt);
+        return count;
+    }
+
+    bool deleteNotification(int notifId, const std::string& userId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "DELETE FROM notifications WHERE id = ? AND user_id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_int(stmt, 1, notifId);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        int rc = sqlite3_step(stmt);
+        bool deleted = rc == SQLITE_DONE && sqlite3_changes(db) > 0;
+        sqlite3_finalize(stmt);
+        return deleted;
     }
 
     void markNotificationsRead(const std::string& userId) {
@@ -2508,28 +4040,83 @@ public:
         }
     }
 
-    bool reactMessage(int msgId, const std::string& reaction) {
+    bool reactMessage(int msgId, const std::string& userId, const std::string& reaction) {
         std::lock_guard<std::mutex> lock(dbMutex);
-        const char* sql = "UPDATE messages SET reaction = ? WHERE id = ?;";
+        if (msgId <= 0 || userId.empty() || reaction.empty()) return false;
         sqlite3_stmt* stmt = nullptr;
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-        sqlite3_bind_text(stmt, 1, reaction.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_int(stmt, 2, msgId);
-        int rc = sqlite3_step(stmt);
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM messages WHERE id = ? AND (sender_id = ? OR recipient_id = ?);", -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_int(stmt, 1, msgId);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+        const bool canReact = sqlite3_step(stmt) == SQLITE_ROW;
         sqlite3_finalize(stmt);
-        return (rc == SQLITE_DONE);
+        if (!canReact) return false;
+
+        const char* deleteSql = "DELETE FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?;";
+        if (sqlite3_prepare_v2(db, deleteSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_int(stmt, 1, msgId);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, reaction.c_str(), -1, SQLITE_STATIC);
+        int rc = sqlite3_step(stmt);
+        const bool removed = sqlite3_changes(db) > 0;
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) return false;
+        if (removed) {
+            executeSimple("UPDATE messages SET reaction = '' WHERE id = " + std::to_string(msgId) + ";");
+            return true;
+        }
+
+        const char* upsertSql = "INSERT INTO message_reactions (message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?) "
+                                "ON CONFLICT(message_id, user_id) DO UPDATE SET emoji = excluded.emoji, created_at = excluded.created_at;";
+        if (sqlite3_prepare_v2(db, upsertSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        const std::string now = getCurrentTimeStr();
+        sqlite3_bind_int(stmt, 1, msgId);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, reaction.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, now.c_str(), -1, SQLITE_STATIC);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rc == SQLITE_DONE) executeSimple("UPDATE messages SET reaction = '' WHERE id = " + std::to_string(msgId) + ";");
+        return rc == SQLITE_DONE;
     }
 
-    bool reactGroupMessage(int msgId, const std::string& reaction) {
+    bool reactGroupMessage(int msgId, const std::string& userId, const std::string& reaction) {
         std::lock_guard<std::mutex> lock(dbMutex);
-        const char* sql = "UPDATE group_messages SET reaction = ? WHERE id = ?;";
+        if (msgId <= 0 || userId.empty() || reaction.empty()) return false;
         sqlite3_stmt* stmt = nullptr;
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-        sqlite3_bind_text(stmt, 1, reaction.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_int(stmt, 2, msgId);
-        int rc = sqlite3_step(stmt);
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM group_messages gm JOIN group_members g ON g.group_id = gm.group_id WHERE gm.id = ? AND g.user_id = ?;", -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_int(stmt, 1, msgId);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        const bool canReact = sqlite3_step(stmt) == SQLITE_ROW;
         sqlite3_finalize(stmt);
-        return (rc == SQLITE_DONE);
+        if (!canReact) return false;
+
+        const char* deleteSql = "DELETE FROM group_message_reactions WHERE group_message_id = ? AND user_id = ? AND emoji = ?;";
+        if (sqlite3_prepare_v2(db, deleteSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_int(stmt, 1, msgId);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, reaction.c_str(), -1, SQLITE_STATIC);
+        int rc = sqlite3_step(stmt);
+        const bool removed = sqlite3_changes(db) > 0;
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) return false;
+        if (removed) {
+            executeSimple("UPDATE group_messages SET reaction = '' WHERE id = " + std::to_string(msgId) + ";");
+            return true;
+        }
+
+        const char* upsertSql = "INSERT INTO group_message_reactions (group_message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?) "
+                                "ON CONFLICT(group_message_id, user_id) DO UPDATE SET emoji = excluded.emoji, created_at = excluded.created_at;";
+        if (sqlite3_prepare_v2(db, upsertSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        const std::string now = getCurrentTimeStr();
+        sqlite3_bind_int(stmt, 1, msgId);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, reaction.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, now.c_str(), -1, SQLITE_STATIC);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rc == SQLITE_DONE) executeSimple("UPDATE group_messages SET reaction = '' WHERE id = " + std::to_string(msgId) + ";");
+        return rc == SQLITE_DONE;
     }
 
     // --- SEARCH REALTIME & SEARCH PAGE (Hình 3 & Hình 4) ---
@@ -2542,20 +4129,43 @@ public:
 
         std::string pattern = "%" + keyword + "%";
 
-        // Tìm người dùng
+        // Tìm người dùng (ẩn người đã chặn)
         if (filter == "ALL" || filter == "PEOPLE") {
             const char* uSql = R"(
-                SELECT id, username, fullname, avatar, school, hometown, user_token
-                FROM users
-                WHERE (fullname LIKE ? OR username LIKE ? OR school LIKE ? OR hometown LIKE ?) AND role != 'ADMIN'
-                LIMIT 15;
+                SELECT u.id, u.username, u.fullname, u.avatar, u.school, u.hometown, u.user_token, u.bio,
+                       CASE WHEN EXISTS (
+                         SELECT 1 FROM friendships f
+                         WHERE f.status = 'FRIEND'
+                           AND ((f.user_id_1 = ? AND f.user_id_2 = u.id) OR (f.user_id_1 = u.id AND f.user_id_2 = ?))
+                       ) THEN 1 ELSE 0 END AS is_friend,
+                       CASE
+                         WHEN EXISTS (SELECT 1 FROM friend_requests fr WHERE fr.requester_id = ? AND fr.receiver_id = u.id AND fr.status = 'PENDING') THEN 'SENT'
+                         WHEN EXISTS (SELECT 1 FROM friend_requests fr WHERE fr.requester_id = u.id AND fr.receiver_id = ? AND fr.status = 'PENDING') THEN 'INCOMING'
+                         ELSE 'NONE'
+                       END AS request_status
+                FROM users u
+                WHERE (u.fullname LIKE ? OR u.username LIKE ? OR u.school LIKE ? OR u.hometown LIKE ?) AND u.role != 'ADMIN'
+                  AND u.id != ?
+                  AND u.id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
+                  AND u.id NOT IN (SELECT user_id_2 FROM friendships WHERE user_id_1 = ? AND status = 'BLOCKED')
+                LIMIT 24;
             )";
             sqlite3_stmt* uStmt = nullptr;
             if (sqlite3_prepare_v2(db, uSql, -1, &uStmt, nullptr) == SQLITE_OK) {
-                sqlite3_bind_text(uStmt, 1, pattern.c_str(), -1, SQLITE_STATIC);
-                sqlite3_bind_text(uStmt, 2, pattern.c_str(), -1, SQLITE_STATIC);
-                sqlite3_bind_text(uStmt, 3, pattern.c_str(), -1, SQLITE_STATIC);
-                sqlite3_bind_text(uStmt, 4, pattern.c_str(), -1, SQLITE_STATIC);
+                // friendship checks
+                sqlite3_bind_text(uStmt, 1, currentUserId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(uStmt, 2, currentUserId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(uStmt, 3, currentUserId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(uStmt, 4, currentUserId.c_str(), -1, SQLITE_STATIC);
+                // LIKE patterns
+                sqlite3_bind_text(uStmt, 5, pattern.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(uStmt, 6, pattern.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(uStmt, 7, pattern.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(uStmt, 8, pattern.c_str(), -1, SQLITE_STATIC);
+                // filters
+                sqlite3_bind_text(uStmt, 9, currentUserId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(uStmt, 10, currentUserId.c_str(), -1, SQLITE_STATIC);
+                sqlite3_bind_text(uStmt, 11, currentUserId.c_str(), -1, SQLITE_STATIC);
                 while (sqlite3_step(uStmt) == SQLITE_ROW) {
                     std::string uid = (const char*)sqlite3_column_text(uStmt, 0);
                     std::string uname = (const char*)sqlite3_column_text(uStmt, 1);
@@ -2564,6 +4174,12 @@ public:
                     std::string school = sqlite3_column_text(uStmt, 4) ? (const char*)sqlite3_column_text(uStmt, 4) : "";
                     std::string hometown = sqlite3_column_text(uStmt, 5) ? (const char*)sqlite3_column_text(uStmt, 5) : "";
                     std::string utoken = sqlite3_column_text(uStmt, 6) ? (const char*)sqlite3_column_text(uStmt, 6) : uid;
+                    std::string bio = sqlite3_column_text(uStmt, 7) ? (const char*)sqlite3_column_text(uStmt, 7) : "";
+                    bool isFriend = sqlite3_column_int(uStmt, 8) == 1;
+                    std::string reqStatus = sqlite3_column_text(uStmt, 9) ? (const char*)sqlite3_column_text(uStmt, 9) : "NONE";
+
+                    std::string subtitle = school.empty() ? hometown : school;
+                    if (!school.empty() && !hometown.empty()) subtitle = school;
 
                     result["users"].push_back({
                         {"id", uid},
@@ -2571,7 +4187,12 @@ public:
                         {"name", fname},
                         {"avatar", av},
                         {"user_token", utoken},
-                        {"subtitle", school.empty() ? hometown : school}
+                        {"bio", bio},
+                        {"school", school},
+                        {"hometown", hometown},
+                        {"subtitle", subtitle},
+                        {"is_friend", isFriend},
+                        {"request_status", reqStatus}
                     });
                 }
                 sqlite3_finalize(uStmt);
@@ -2668,35 +4289,379 @@ public:
     }
 
     std::vector<Report> getAllReports() {
+        return getReportsPaged(-1, 0, "");
+    }
+
+    // Lấy báo cáo theo trang (phục vụ cuộn vô hạn ở trang Admin).
+    // limit < 0: lấy toàn bộ. keyword: lọc theo lý do, người báo cáo, người/bài bị báo cáo, trạng thái.
+    std::vector<Report> getReportsPaged(int limit, int offset, const std::string& keyword) {
         std::lock_guard<std::mutex> lock(dbMutex);
         std::vector<Report> list;
         const char* sql = R"(
-            SELECT r.id, r.reporter_id, u1.fullname, r.reported_user_id,
-                   COALESCE(u2.fullname, ''), r.reported_post_id, r.reported_comment_id, r.reason, r.status, r.created_at
+            SELECT r.id, r.reporter_id, COALESCE(u1.fullname, ''), COALESCE(r.reported_user_id, ''),
+                   COALESCE(u2.fullname, ''), COALESCE(r.reported_post_id, ''), COALESCE(r.reported_comment_id, ''),
+                   COALESCE(r.reason, ''), COALESCE(r.status, ''), COALESCE(r.created_at, ''),
+                   COALESCE(r.category, ''), COALESCE(r.resolution_note, ''), COALESCE(r.resolved_by, ''), COALESCE(r.resolved_at, ''),
+                   COALESCE(substr(p.content, 1, 300), '')
             FROM reports r
             JOIN users u1 ON r.reporter_id = u1.id
             LEFT JOIN users u2 ON r.reported_user_id = u2.id
-            ORDER BY r.id DESC;
+            LEFT JOIN posts p ON p.id = r.reported_post_id AND r.reported_post_id != ''
+            WHERE (?1 = '' OR r.reason LIKE ?2 OR u1.fullname LIKE ?2 OR COALESCE(u2.fullname, '') LIKE ?2
+                   OR COALESCE(r.reported_user_id, '') LIKE ?2 OR COALESCE(r.reported_post_id, '') LIKE ?2
+                   OR r.status LIKE ?2 OR CAST(r.id AS TEXT) = ?1)
+            ORDER BY r.id DESC
+            LIMIT ?3 OFFSET ?4;
         )";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return list;
-
+        const std::string like = "%" + keyword + "%";
+        sqlite3_bind_text(stmt, 1, keyword.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, like.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 3, limit);
+        sqlite3_bind_int(stmt, 4, offset < 0 ? 0 : offset);
+        auto col = [&stmt](int i) -> std::string {
+            const unsigned char* t = sqlite3_column_text(stmt, i);
+            return t ? std::string((const char*)t) : std::string();
+        };
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             Report r;
             r.id = sqlite3_column_int(stmt, 0);
-            r.reporter_id = (const char*)sqlite3_column_text(stmt, 1);
-            r.reporter_name = (const char*)sqlite3_column_text(stmt, 2);
-            r.reported_user_id = sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : "";
-            r.reported_user_name = sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : "";
-            r.reported_post_id = sqlite3_column_text(stmt, 5) ? (const char*)sqlite3_column_text(stmt, 5) : "";
-            r.reported_comment_id = sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : "";
-            r.reason = (const char*)sqlite3_column_text(stmt, 7);
-            r.status = (const char*)sqlite3_column_text(stmt, 8);
-            r.created_at = (const char*)sqlite3_column_text(stmt, 9);
+            r.reporter_id = col(1);
+            r.reporter_name = col(2);
+            r.reported_user_id = col(3);
+            r.reported_user_name = col(4);
+            r.reported_post_id = col(5);
+            r.reported_comment_id = col(6);
+            r.reason = col(7);
+            r.status = col(8);
+            r.created_at = col(9);
+            r.category = col(10);
+            r.resolution_note = col(11);
+            r.resolved_by = col(12);
+            r.resolved_at = col(13);
+            r.reported_post_content = col(14);
             list.push_back(r);
         }
         sqlite3_finalize(stmt);
         return list;
+    }
+
+    bool classifyReport(int reportId, const std::string& category) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "UPDATE reports SET category = ? WHERE id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, category.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 2, reportId);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) > 0;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    // ---- Phiên đăng nhập quản trị viên (lưu DB: khởi động lại server vẫn không phải đăng nhập lại) ----
+    // ---------------- Token quản trị (chỉ lưu băm, hết hạn sau 8 giờ) ----------------
+    std::string issueAdminToken(const std::string& adminId) {
+        const std::string token = sec::randomToken(24);
+        const std::string hash = sec::sha256Hex(token);
+        const long long now = sec::epochSeconds();
+        std::lock_guard<std::mutex> lock(dbMutex);
+        executeSimple("DELETE FROM admin_sessions WHERE expires_at < strftime('%s','now');");
+        const char* sql = "INSERT INTO admin_sessions (token, admin_id, created_at, expires_at) VALUES (?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return "";
+        const std::string nowStr = getCurrentTimeStr();
+        sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, adminId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, nowStr.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int64(stmt, 4, now + 8 * 3600);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok ? token : "";
+    }
+
+    bool verifyAdminToken(const std::string& adminId, const std::string& token) {
+        if (adminId.empty() || token.size() != 48) return false;
+        const std::string hash = sec::sha256Hex(token);
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "SELECT 1 FROM admin_sessions s JOIN users u ON u.id = s.admin_id "
+                          "WHERE s.token = ? AND s.admin_id = ? AND s.expires_at > ? AND u.role = 'ADMIN' AND u.status != 'LOCKED' LIMIT 1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, adminId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int64(stmt, 3, sec::epochSeconds());
+        const bool ok = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    void revokeAdminToken(const std::string& token) {
+        if (token.empty()) return;
+        const std::string hash = sec::sha256Hex(token);
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "DELETE FROM admin_sessions WHERE token = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+        sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    // ---------------- Phiên đăng nhập người dùng (cookie HttpOnly) ----------------
+    static constexpr long long kSessionTtlSec = 7LL * 24 * 3600;
+
+    std::string createUserSession(const std::string& userId, const std::string& ip, const std::string& userAgent) {
+        const std::string token = sec::randomToken(32);
+        const std::string hash = sec::sha256Hex(token);
+        const long long now = sec::epochSeconds();
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, last_seen, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return "";
+        const std::string ua = userAgent.substr(0, 200);
+        sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int64(stmt, 3, now);
+        sqlite3_bind_int64(stmt, 4, now + kSessionTtlSec);
+        sqlite3_bind_int64(stmt, 5, now);
+        sqlite3_bind_text(stmt, 6, ip.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 7, ua.c_str(), -1, SQLITE_STATIC);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        if (!ok) return "";
+        // Mỗi tài khoản giữ tối đa 10 phiên (xoá phiên cũ nhất)
+        const char* trim = "DELETE FROM user_sessions WHERE user_id = ? AND token_hash NOT IN "
+                           "(SELECT token_hash FROM user_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 10);";
+        sqlite3_stmt* ts = nullptr;
+        if (sqlite3_prepare_v2(db, trim, -1, &ts, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(ts, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(ts, 2, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(ts);
+            sqlite3_finalize(ts);
+        }
+        return token;
+    }
+
+    // Trả về true và gán userIdOut nếu token hợp lệ, chưa hết hạn, tài khoản không bị khoá và không phải admin
+    bool getSessionUser(const std::string& token, std::string& userIdOut) {
+        if (token.size() != 64) return false;
+        const std::string hash = sec::sha256Hex(token);
+        const long long now = sec::epochSeconds();
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "SELECT s.user_id, s.expires_at, s.last_seen, u.role, u.status FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
+        bool ok = false, expired = false, refresh = false;
+        std::string uid;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* c0 = sqlite3_column_text(stmt, 0);
+            uid = c0 ? reinterpret_cast<const char*>(c0) : "";
+            const long long exp = sqlite3_column_int64(stmt, 1);
+            const long long seen = sqlite3_column_int64(stmt, 2);
+            const unsigned char* c3 = sqlite3_column_text(stmt, 3);
+            const unsigned char* c4 = sqlite3_column_text(stmt, 4);
+            const std::string role = c3 ? reinterpret_cast<const char*>(c3) : "";
+            const std::string status = c4 ? reinterpret_cast<const char*>(c4) : "";
+            if (exp <= now) expired = true;
+            else if (role != "ADMIN" && status != "LOCKED") { ok = true; refresh = (now - seen > 3600); }
+        }
+        sqlite3_finalize(stmt);
+        if (expired) {
+            sqlite3_stmt* d = nullptr;
+            if (sqlite3_prepare_v2(db, "DELETE FROM user_sessions WHERE token_hash = ?;", -1, &d, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(d, 1, hash.c_str(), -1, SQLITE_STATIC);
+                sqlite3_step(d);
+                sqlite3_finalize(d);
+            }
+        }
+        if (ok && refresh) {  // gia hạn trượt, tối đa 1 lần/giờ để không ghi DB mỗi request
+            sqlite3_stmt* u = nullptr;
+            if (sqlite3_prepare_v2(db, "UPDATE user_sessions SET last_seen = ?, expires_at = ? WHERE token_hash = ?;", -1, &u, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int64(u, 1, now);
+                sqlite3_bind_int64(u, 2, now + kSessionTtlSec);
+                sqlite3_bind_text(u, 3, hash.c_str(), -1, SQLITE_STATIC);
+                sqlite3_step(u);
+                sqlite3_finalize(u);
+            }
+        }
+        if (ok) userIdOut = uid;
+        return ok;
+    }
+
+    void deleteUserSession(const std::string& token) {
+        if (token.size() != 64) return;
+        const std::string hash = sec::sha256Hex(token);
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sqlite3_stmt* d = nullptr;
+        if (sqlite3_prepare_v2(db, "DELETE FROM user_sessions WHERE token_hash = ?;", -1, &d, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(d, 1, hash.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(d);
+            sqlite3_finalize(d);
+        }
+    }
+
+    // Xoá mọi phiên của user (trừ phiên keepToken nếu có) - dùng khi đổi mật khẩu / khoá tài khoản
+    void deleteUserSessions(const std::string& userId, const std::string& keepToken = "") {
+        const std::string keepHash = keepToken.empty() ? "" : sec::sha256Hex(keepToken);
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sqlite3_stmt* d = nullptr;
+        if (sqlite3_prepare_v2(db, "DELETE FROM user_sessions WHERE user_id = ? AND token_hash != ?;", -1, &d, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(d, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(d, 2, keepHash.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(d);
+            sqlite3_finalize(d);
+        }
+    }
+
+    void purgeExpiredSessions() {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        executeSimple("DELETE FROM user_sessions WHERE expires_at < strftime('%s','now');");
+        executeSimple("DELETE FROM admin_sessions WHERE expires_at < strftime('%s','now');");
+        executeSimple("DELETE FROM otp_codes WHERE expires_at < strftime('%s','now') - 3600;");
+    }
+
+    // Ghi mật khẩu đã băm (updateUser() KHÔNG cập nhật mật khẩu nên bản cũ đổi mật khẩu không có tác dụng)
+    bool updatePassword(const std::string& userId, const std::string& passwordHash) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, "UPDATE users SET password_hash = ? WHERE id = ?;", -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, passwordHash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    // Người dùng có được xem bài trong nhóm cộng đồng này không (nhóm công khai hoặc là thành viên)
+    bool canViewCommunityPost(const std::string& postId, const std::string& userId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "SELECT g.privacy, EXISTS(SELECT 1 FROM community_group_members m WHERE m.group_id = g.id AND m.user_id = ?) "
+                          "FROM community_group_posts p JOIN community_groups g ON g.id = p.group_id WHERE p.id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, postId.c_str(), -1, SQLITE_STATIC);
+        bool ok = false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* pv = sqlite3_column_text(stmt, 0);
+            const std::string privacy = pv ? reinterpret_cast<const char*>(pv) : "PUBLIC";
+            ok = (privacy != "PRIVATE") || sqlite3_column_int(stmt, 1) == 1;
+        }
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool hasWeakAdminPassword() const { return weakAdminPassword_; }
+
+    bool isUserAdmin(const std::string& userId) {
+        if (userId.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "SELECT 1 FROM users WHERE id = ? AND role = 'ADMIN' LIMIT 1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        bool isAdmin = (sqlite3_step(stmt) == SQLITE_ROW);
+        sqlite3_finalize(stmt);
+        return isAdmin;
+    }
+
+    void logAdminAction(const std::string& adminId, const std::string& action,
+                        const std::string& targetType = "", const std::string& targetId = "",
+                        const std::string& detail = "") {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "INSERT INTO admin_audit_logs (admin_id, action, target_type, target_id, detail, created_at) VALUES (?, ?, ?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+        std::string now = getCurrentTimeStr();
+        sqlite3_bind_text(stmt, 1, adminId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, action.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, targetType.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, targetId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, detail.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 6, now.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    json getAdminAuditLogs(int limit = 50) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json arr = json::array();
+        const char* sql = R"(
+            SELECT a.id, a.admin_id, COALESCE(u.fullname,''), a.action, a.target_type, a.target_id, a.detail, a.created_at
+            FROM admin_audit_logs a
+            LEFT JOIN users u ON u.id = a.admin_id
+            ORDER BY a.id DESC LIMIT ?;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return arr;
+        sqlite3_bind_int(stmt, 1, limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            arr.push_back({
+                {"id", sqlite3_column_int(stmt, 0)},
+                {"admin_id", sqlite3_column_text(stmt, 1) ? (const char*)sqlite3_column_text(stmt, 1) : ""},
+                {"admin_name", sqlite3_column_text(stmt, 2) ? (const char*)sqlite3_column_text(stmt, 2) : ""},
+                {"action", sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : ""},
+                {"target_type", sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : ""},
+                {"target_id", sqlite3_column_text(stmt, 5) ? (const char*)sqlite3_column_text(stmt, 5) : ""},
+                {"detail", sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : ""},
+                {"created_at", sqlite3_column_text(stmt, 7) ? (const char*)sqlite3_column_text(stmt, 7) : ""}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return arr;
+    }
+
+    bool resolveReportEx(int reportId, const std::string& action, const std::string& adminId,
+                         const std::string& note, std::string& reporterIdOut) {
+        reporterIdOut.clear();
+        std::lock_guard<std::mutex> lock(dbMutex);
+        // fetch reporter
+        {
+            const char* q = "SELECT reporter_id FROM reports WHERE id = ? LIMIT 1;";
+            sqlite3_stmt* s = nullptr;
+            if (sqlite3_prepare_v2(db, q, -1, &s, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int(s, 1, reportId);
+                if (sqlite3_step(s) == SQLITE_ROW && sqlite3_column_text(s, 0)) {
+                    reporterIdOut = (const char*)sqlite3_column_text(s, 0);
+                }
+                sqlite3_finalize(s);
+            }
+        }
+        std::string now = getCurrentTimeStr();
+        const char* sql = "UPDATE reports SET status = ?, resolution_note = ?, resolved_by = ?, resolved_at = ? WHERE id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, action.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, note.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, adminId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, now.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 5, reportId);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool deleteUserAccount(const std::string& userId) {
+        if (userId.empty()) return false;
+        User u;
+        if (!getUserById(userId, u)) return false;
+        if (u.role == "ADMIN") return false; // never delete admin via this path
+        std::lock_guard<std::mutex> lock(dbMutex);
+        // Soft-delete approach: lock + anonymize to keep FK integrity
+        const char* sql = R"(
+            UPDATE users SET status = 'DELETED', fullname = 'Tài khoản đã xóa', bio = '',
+              avatar = '/img/default-avatar.svg', email = email || '.deleted.' || id,
+              username = username || '_deleted_' || id, password_hash = 'DELETED'
+            WHERE id = ? AND role != 'ADMIN';
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
     }
 
     bool resolveReport(int reportId, const std::string& action) {
@@ -2727,12 +4692,13 @@ public:
         };
 
         return {
-            {"total_users", queryCount("SELECT COUNT(*) FROM users;")},
-            {"locked_users", queryCount("SELECT COUNT(*) FROM users WHERE status = 'LOCKED';")},
+            {"total_users", queryCount("SELECT COUNT(*) FROM users WHERE role != 'ADMIN';")},
+            {"locked_users", queryCount("SELECT COUNT(*) FROM users WHERE status = 'LOCKED' AND role != 'ADMIN';")},
             {"total_posts", queryCount("SELECT COUNT(*) FROM posts;")},
             {"total_messages", queryCount("SELECT COUNT(*) FROM messages;")},
             {"total_reports", queryCount("SELECT COUNT(*) FROM reports;")},
             {"pending_reports", queryCount("SELECT COUNT(*) FROM reports WHERE status = 'PENDING';")},
+            {"in_progress_reports", queryCount("SELECT COUNT(*) FROM reports WHERE status = 'IN_PROGRESS';")},
             {"total_groups", queryCount("SELECT COUNT(*) FROM groups;")}
         };
     }
@@ -2986,10 +4952,18 @@ public:
             sqlite3_finalize(aStmt);
         }
 
+        for (auto& message : messages) {
+            if (message.recipient_id == user1 && message.sender_id != user1) {
+                recordDirectMessageDelivered(message.id, user1);
+            }
+            message.receipts = getMessageReceiptDetails(message.id, false);
+            message.reactions = getMessageReactionSummaries(message.id, false);
+        }
         return messages;
     }
 
-    std::vector<GroupMessage> getGroupMessagesAround(const std::string& groupId, int targetId, int range = 15) {
+    std::vector<GroupMessage> getGroupMessagesAround(const std::string& groupId, int targetId, int range = 15,
+                                                      const std::string& viewerId = "") {
         std::lock_guard<std::mutex> lock(dbMutex);
         std::vector<GroupMessage> messages;
 
@@ -3089,14 +5063,24 @@ public:
             sqlite3_finalize(aStmt);
         }
 
+        for (auto& message : messages) {
+            if (!viewerId.empty() && message.sender_id != viewerId) {
+                recordGroupMessageDelivered(message.id, groupId, viewerId);
+            }
+            message.receipts = getMessageReceiptDetails(message.id, true);
+            message.reactions = getMessageReactionSummaries(message.id, true);
+        }
         return messages;
     }
 
-    std::vector<Message> searchMessages(const std::string& user1, const std::string& user2, const std::string& query) {
+    std::vector<Message> searchMessages(const std::string& user1, const std::string& user2, const std::string& query,
+                                        int limit = 10, int offset = 0) {
         std::lock_guard<std::mutex> lock(dbMutex);
         std::string convId = getConversationId(user1, user2);
         std::vector<Message> results;
         if (query.empty()) return results;
+        limit = std::max(1, limit);
+        offset = std::max(0, offset);
 
         std::string normQ = removeVietnameseTones(query);
 
@@ -3107,10 +5091,14 @@ public:
         if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) return results;
 
         sqlite3_bind_text(stmt, 1, convId.c_str(), -1, SQLITE_STATIC);
+        int matchedCount = 0;
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             std::string content = (const char*)sqlite3_column_text(stmt, 6);
+            // Lọc bỏ tin nhắn hệ thống (__SYS_...) khi tìm kiếm
+            if (content.rfind("__SYS_", 0) == 0) continue;
             std::string normContent = removeVietnameseTones(content);
             if (normContent.find(normQ) != std::string::npos) {
+                if (matchedCount++ < offset) continue;
                 Message m;
                 m.id = sqlite3_column_int(stmt, 0);
                 m.conversation_id = (const char*)sqlite3_column_text(stmt, 1);
@@ -3129,17 +5117,21 @@ public:
                 m.is_read = sqlite3_column_int(stmt, 14);
                 m.reply_to_id = sqlite3_column_int(stmt, 15);
                 results.push_back(m);
-                if (results.size() >= 50) break;
+                if (static_cast<int>(results.size()) >= limit) break;
             }
         }
         sqlite3_finalize(stmt);
         return results;
     }
 
-    std::vector<GroupMessage> searchGroupMessages(const std::string& groupId, const std::string& query, const std::string& viewerId = "") {
+    std::vector<GroupMessage> searchGroupMessages(const std::string& groupId, const std::string& query,
+                                                   const std::string& viewerId = "",
+                                                   int limit = 10, int offset = 0) {
         std::lock_guard<std::mutex> lock(dbMutex);
         std::vector<GroupMessage> results;
         if (query.empty()) return results;
+        limit = std::max(1, limit);
+        offset = std::max(0, offset);
 
         std::string normQ = removeVietnameseTones(query);
 
@@ -3151,6 +5143,7 @@ public:
         if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) return results;
 
         sqlite3_bind_text(stmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        int matchedCount = 0;
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             int msgId = sqlite3_column_int(stmt, 0);
             if (!viewerId.empty()) {
@@ -3167,8 +5160,11 @@ public:
             }
 
             std::string content = (const char*)sqlite3_column_text(stmt, 5);
+            // Lọc bỏ tin nhắn hệ thống (__SYS_...) khi tìm kiếm nhóm
+            if (content.rfind("__SYS_", 0) == 0) continue;
             std::string normContent = removeVietnameseTones(content);
             if (normContent.find(normQ) != std::string::npos) {
+                if (matchedCount++ < offset) continue;
                 GroupMessage m;
                 m.id = msgId;
                 m.group_id = (const char*)sqlite3_column_text(stmt, 1);
@@ -3185,10 +5181,158 @@ public:
                 m.reply_to_text = sqlite3_column_text(stmt, 12) ? (const char*)sqlite3_column_text(stmt, 12) : "";
                 m.reply_to_id = sqlite3_column_int(stmt, 13);
                 results.push_back(m);
-                if (results.size() >= 50) break;
+                if (static_cast<int>(results.size()) >= limit) break;
             }
         }
         sqlite3_finalize(stmt);
+        return results;
+    }
+
+    json searchAllMessages(const std::string& userId, const std::string& query) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json results = json::array();
+        if (userId.empty() || query.empty()) return results;
+
+        const std::string normalizedQuery = removeVietnameseTones(query);
+        std::vector<json> matches;
+        const char* directSql = R"(
+            SELECT m.id, m.conversation_id, m.sender_id, s.fullname, s.avatar, m.recipient_id,
+                   m.content, m.shared_post_id, m.is_revoked, m.created_at,
+                   COALESCE(m.media_type, 'NONE'), COALESCE(m.media_url, ''),
+                   COALESCE(m.reaction, ''), COALESCE(m.reply_to_text, ''), m.is_read,
+                   COALESCE(m.reply_to_id, 0),
+                   CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END,
+                   COALESCE(
+                     (SELECT nickname FROM user_nicknames
+                      WHERE user_id = ? AND friend_id =
+                        CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END),
+                     partner.fullname),
+                   partner.avatar, COALESCE(partner.user_token, '')
+            FROM messages m
+            JOIN users s ON s.id = m.sender_id
+            JOIN users partner ON partner.id =
+              CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END
+            WHERE m.is_revoked = 0
+              AND (m.sender_id = ? OR m.recipient_id = ?)
+              AND EXISTS (
+                SELECT 1 FROM friendships f
+                WHERE f.status = 'FRIEND'
+                  AND ((f.user_id_1 = ? AND f.user_id_2 =
+                        CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END)
+                    OR (f.user_id_2 = ? AND f.user_id_1 =
+                        CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END))
+              )
+            ORDER BY m.id DESC;
+        )";
+        sqlite3_stmt* directStmt = nullptr;
+        if (sqlite3_prepare_v2(db, directSql, -1, &directStmt, nullptr) == SQLITE_OK) {
+            for (int index : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
+                sqlite3_bind_text(directStmt, index, userId.c_str(), -1, SQLITE_STATIC);
+            }
+            while (sqlite3_step(directStmt) == SQLITE_ROW && matches.size() < 50) {
+                const char* rawContent = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 6));
+                const std::string content = rawContent ? rawContent : "";
+                if (content.rfind("__SYS_", 0) == 0 ||
+                    removeVietnameseTones(content).find(normalizedQuery) == std::string::npos) continue;
+
+                Message message;
+                message.id = sqlite3_column_int(directStmt, 0);
+                message.conversation_id = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 1));
+                message.sender_id = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 2));
+                message.sender_name = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 3));
+                message.sender_avatar = sqlite3_column_text(directStmt, 4)
+                    ? reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 4)) : "";
+                message.recipient_id = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 5));
+                message.content = content;
+                message.shared_post_id = sqlite3_column_text(directStmt, 7)
+                    ? reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 7)) : "";
+                message.is_revoked = sqlite3_column_int(directStmt, 8);
+                message.created_at = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 9));
+                message.media_type = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 10));
+                message.media_url = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 11));
+                message.reaction = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 12));
+                message.reply_to_text = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 13));
+                message.is_read = sqlite3_column_int(directStmt, 14);
+                message.reply_to_id = sqlite3_column_int(directStmt, 15);
+
+                json item = message.toJson();
+                item["is_group"] = false;
+                item["partner_id"] = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 16));
+                item["partner_name"] = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 17));
+                item["partner_avatar"] = sqlite3_column_text(directStmt, 18)
+                    ? reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 18)) : "";
+                item["partner_token"] = reinterpret_cast<const char*>(sqlite3_column_text(directStmt, 19));
+                matches.push_back(std::move(item));
+            }
+            sqlite3_finalize(directStmt);
+        } else {
+            return json{{"error", "Không thể chuẩn bị truy vấn tìm kiếm tin nhắn."}};
+        }
+
+        const char* groupSql = R"(
+            SELECT gm.id, gm.group_id, gm.sender_id, s.fullname, s.avatar, gm.content,
+                   COALESCE(gm.shared_post_id, ''), gm.created_at,
+                   COALESCE(gm.media_type, 'NONE'), COALESCE(gm.media_url, ''),
+                   COALESCE(gm.is_revoked, 0), COALESCE(gm.reaction, ''),
+                   COALESCE(gm.reply_to_text, ''), COALESCE(gm.reply_to_id, 0),
+                   g.name, g.avatar
+            FROM group_messages gm
+            JOIN users s ON s.id = gm.sender_id
+            JOIN groups g ON g.id = gm.group_id
+            JOIN group_members membership ON membership.group_id = gm.group_id AND membership.user_id = ?
+            WHERE COALESCE(gm.is_revoked, 0) = 0
+              AND NOT EXISTS (
+                SELECT 1 FROM group_messages_deleted deleted
+                WHERE deleted.user_id = ? AND deleted.message_id = gm.id
+              )
+            ORDER BY gm.id DESC;
+        )";
+        sqlite3_stmt* groupStmt = nullptr;
+        if (sqlite3_prepare_v2(db, groupSql, -1, &groupStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(groupStmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(groupStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            size_t groupMatches = 0;
+            while (sqlite3_step(groupStmt) == SQLITE_ROW && groupMatches < 50) {
+                const char* rawContent = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 5));
+                const std::string content = rawContent ? rawContent : "";
+                if (content.rfind("__SYS_", 0) == 0 ||
+                    removeVietnameseTones(content).find(normalizedQuery) == std::string::npos) continue;
+
+                GroupMessage message;
+                message.id = sqlite3_column_int(groupStmt, 0);
+                message.group_id = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 1));
+                message.sender_id = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 2));
+                message.sender_name = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 3));
+                message.sender_avatar = sqlite3_column_text(groupStmt, 4)
+                    ? reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 4)) : "";
+                message.content = content;
+                message.shared_post_id = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 6));
+                message.created_at = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 7));
+                message.media_type = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 8));
+                message.media_url = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 9));
+                message.is_revoked = sqlite3_column_int(groupStmt, 10);
+                message.reaction = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 11));
+                message.reply_to_text = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 12));
+                message.reply_to_id = sqlite3_column_int(groupStmt, 13);
+
+                json item = message.toJson();
+                item["is_group"] = true;
+                item["group_name"] = reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 14));
+                item["group_avatar"] = sqlite3_column_text(groupStmt, 15)
+                    ? reinterpret_cast<const char*>(sqlite3_column_text(groupStmt, 15)) : "";
+                matches.push_back(std::move(item));
+                ++groupMatches;
+            }
+            sqlite3_finalize(groupStmt);
+        } else {
+            return json{{"error", "Không thể chuẩn bị truy vấn tìm kiếm tin nhắn nhóm."}};
+        }
+
+        std::sort(matches.begin(), matches.end(), [](const json& left, const json& right) {
+            return left.value("created_at", "") > right.value("created_at", "");
+        });
+        if (matches.size() > 50) matches.resize(50);
+        for (auto& match : matches) results.push_back(std::move(match));
         return results;
     }
 
@@ -3344,4 +5488,461 @@ public:
         outNewPostId = newPostId;
         return true;
     }
+
+    // ===================== COMMUNITY GROUPS =====================
+    std::string generateCommunityGroupId() {
+        const char* sql = "SELECT COUNT(*) FROM community_groups;";
+        sqlite3_stmt* stmt = nullptr;
+        int count = 0;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) count = sqlite3_column_int(stmt, 0);
+            sqlite3_finalize(stmt);
+        }
+        std::stringstream ss;
+        ss << "CG" << std::setw(6) << std::setfill('0') << (count + 1);
+        return ss.str();
+    }
+
+    bool createCommunityGroup(const std::string& name, const std::string& description,
+                              const std::string& avatar, const std::string& privacy,
+                              const std::string& createdBy, json& outGroup) {
+        if (name.empty() || createdBy.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        std::string id = generateCommunityGroupId();
+        std::string timeStr = getCurrentTimeStr();
+        std::string priv = (privacy == "PRIVATE") ? "PRIVATE" : "PUBLIC";
+        const char* sql = "INSERT INTO community_groups (id, name, description, avatar, privacy, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, description.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, avatar.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, priv.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 6, createdBy.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 7, timeStr.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) != SQLITE_DONE) { sqlite3_finalize(stmt); return false; }
+        sqlite3_finalize(stmt);
+        const char* mSql = "INSERT INTO community_group_members (group_id, user_id, role, joined_at) VALUES (?, ?, 'ADMIN', ?);";
+        sqlite3_stmt* mStmt = nullptr;
+        if (sqlite3_prepare_v2(db, mSql, -1, &mStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(mStmt, 1, id.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(mStmt, 2, createdBy.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(mStmt, 3, timeStr.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(mStmt);
+            sqlite3_finalize(mStmt);
+        }
+        outGroup = {{"id", id}, {"name", name}, {"description", description}, {"avatar", avatar},
+                    {"privacy", priv}, {"created_by", createdBy}, {"created_at", timeStr}, {"member_count", 1}, {"role", "ADMIN"}};
+        return true;
+    }
+
+    bool joinCommunityGroup(const std::string& groupId, const std::string& userId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        // PRIVATE: vẫn cho join trực tiếp (đơn giản); có thể mở rộng request sau
+        const char* sql = "INSERT OR IGNORE INTO community_group_members (group_id, user_id, role, joined_at) VALUES (?, ?, 'MEMBER', ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        std::string timeStr = getCurrentTimeStr();
+        sqlite3_bind_text(stmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, timeStr.c_str(), -1, SQLITE_STATIC);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool leaveCommunityGroup(const std::string& groupId, const std::string& userId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "DELETE FROM community_group_members WHERE group_id = ? AND user_id = ? AND role != 'ADMIN';";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    json getMyCommunityGroups(const std::string& userId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json arr = json::array();
+        const char* sql = R"(
+            SELECT g.id, g.name, g.description, g.avatar, g.privacy, g.created_by, g.created_at, m.role,
+                   (SELECT COUNT(*) FROM community_group_members WHERE group_id = g.id) as member_count,
+                   (SELECT MAX(created_at) FROM community_group_posts WHERE group_id = g.id AND approval_status = 'APPROVED') as last_activity
+            FROM community_groups g
+            JOIN community_group_members m ON m.group_id = g.id AND m.user_id = ?
+            ORDER BY COALESCE(last_activity, g.created_at) DESC;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return arr;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            arr.push_back({
+                {"id", (const char*)sqlite3_column_text(stmt, 0)},
+                {"name", (const char*)sqlite3_column_text(stmt, 1)},
+                {"description", sqlite3_column_text(stmt, 2) ? (const char*)sqlite3_column_text(stmt, 2) : ""},
+                {"avatar", sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : ""},
+                {"privacy", sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : "PUBLIC"},
+                {"created_by", (const char*)sqlite3_column_text(stmt, 5)},
+                {"created_at", (const char*)sqlite3_column_text(stmt, 6)},
+                {"role", (const char*)sqlite3_column_text(stmt, 7)},
+                {"member_count", sqlite3_column_int(stmt, 8)},
+                {"last_activity", sqlite3_column_text(stmt, 9) ? (const char*)sqlite3_column_text(stmt, 9) : ""}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return arr;
+    }
+
+    json discoverCommunityGroups(const std::string& userId, const std::string& keyword = "") {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json arr = json::array();
+        std::string sql = R"(
+            SELECT g.id, g.name, g.description, g.avatar, g.privacy, g.created_by, g.created_at,
+                   (SELECT COUNT(*) FROM community_group_members WHERE group_id = g.id) as member_count,
+                   EXISTS(SELECT 1 FROM community_group_members WHERE group_id = g.id AND user_id = ?) as is_member
+            FROM community_groups g
+            WHERE g.privacy = 'PUBLIC'
+        )";
+        if (!keyword.empty()) sql += " AND (g.name LIKE ? OR g.description LIKE ?)";
+        sql += " ORDER BY member_count DESC, g.created_at DESC LIMIT 50;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) return arr;
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        if (!keyword.empty()) {
+            std::string pattern = "%" + keyword + "%";
+            sqlite3_bind_text(stmt, 2, pattern.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, pattern.c_str(), -1, SQLITE_STATIC);
+        }
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            arr.push_back({
+                {"id", (const char*)sqlite3_column_text(stmt, 0)},
+                {"name", (const char*)sqlite3_column_text(stmt, 1)},
+                {"description", sqlite3_column_text(stmt, 2) ? (const char*)sqlite3_column_text(stmt, 2) : ""},
+                {"avatar", sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : ""},
+                {"privacy", sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : "PUBLIC"},
+                {"created_by", (const char*)sqlite3_column_text(stmt, 5)},
+                {"created_at", (const char*)sqlite3_column_text(stmt, 6)},
+                {"member_count", sqlite3_column_int(stmt, 7)},
+                {"is_member", sqlite3_column_int(stmt, 8) != 0}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return arr;
+    }
+
+    bool createCommunityGroupPost(const std::string& groupId, const std::string& authorId,
+                                  const std::string& content, const std::string& mediaType,
+                                  const std::string& mediaUrl, std::string& outPostId, std::string& outStatus) {
+        if (groupId.empty() || authorId.empty() || content.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        // check membership + role
+        const char* roleSql = "SELECT role FROM community_group_members WHERE group_id = ? AND user_id = ? LIMIT 1;";
+        sqlite3_stmt* rStmt = nullptr;
+        std::string role;
+        if (sqlite3_prepare_v2(db, roleSql, -1, &rStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(rStmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(rStmt, 2, authorId.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(rStmt) != SQLITE_ROW) { sqlite3_finalize(rStmt); return false; }
+        role = (const char*)sqlite3_column_text(rStmt, 0);
+        sqlite3_finalize(rStmt);
+
+        std::string status = (role == "ADMIN") ? "APPROVED" : "PENDING";
+        outStatus = status;
+        std::string postId = "CGP" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+        std::string timeStr = getCurrentTimeStr();
+        const char* sql = "INSERT INTO community_group_posts (id, group_id, author_id, content, media_type, media_url, approval_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, authorId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, content.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, mediaType.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 6, mediaUrl.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 7, status.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 8, timeStr.c_str(), -1, SQLITE_STATIC);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        if (ok) outPostId = postId;
+        return ok;
+    }
+
+    bool approveCommunityGroupPost(const std::string& postId, const std::string& adminId, bool approve) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* check = R"(
+            SELECT 1 FROM community_group_posts p
+            JOIN community_group_members m ON m.group_id = p.group_id AND m.user_id = ? AND m.role = 'ADMIN'
+            WHERE p.id = ? LIMIT 1;
+        )";
+        sqlite3_stmt* cStmt = nullptr;
+        if (sqlite3_prepare_v2(db, check, -1, &cStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(cStmt, 1, adminId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(cStmt, 2, postId.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(cStmt) != SQLITE_ROW) { sqlite3_finalize(cStmt); return false; }
+        sqlite3_finalize(cStmt);
+        std::string status = approve ? "APPROVED" : "REJECTED";
+        const char* sql = "UPDATE community_group_posts SET approval_status = ? WHERE id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, status.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, postId.c_str(), -1, SQLITE_STATIC);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    json getCommunityGroupFeed(const std::string& userId, const std::string& groupId = "", int limit = 20) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json arr = json::array();
+        std::string sql;
+        if (groupId.empty()) {
+            sql = R"(
+                SELECT p.id, p.group_id, g.name, p.author_id, u.fullname, u.avatar, p.content,
+                       p.media_type, p.media_url, p.approval_status, p.created_at, u.user_token
+                FROM community_group_posts p
+                JOIN community_groups g ON g.id = p.group_id
+                JOIN users u ON u.id = p.author_id
+                JOIN community_group_members m ON m.group_id = p.group_id AND m.user_id = ?
+                WHERE p.approval_status = 'APPROVED'
+                ORDER BY p.created_at DESC LIMIT ?;
+            )";
+        } else {
+            sql = R"(
+                SELECT p.id, p.group_id, g.name, p.author_id, u.fullname, u.avatar, p.content,
+                       p.media_type, p.media_url, p.approval_status, p.created_at, u.user_token
+                FROM community_group_posts p
+                JOIN community_groups g ON g.id = p.group_id
+                JOIN users u ON u.id = p.author_id
+                WHERE p.group_id = ?
+                  AND (
+                    p.approval_status = 'APPROVED'
+                    OR (p.approval_status = 'PENDING' AND EXISTS (
+                        SELECT 1 FROM community_group_members m WHERE m.group_id = p.group_id AND m.user_id = ? AND m.role = 'ADMIN'
+                    ))
+                    OR p.author_id = ?
+                  )
+                ORDER BY p.created_at DESC LIMIT ?;
+            )";
+        }
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) return arr;
+        if (groupId.empty()) {
+            sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 2, limit);
+        } else {
+            sqlite3_bind_text(stmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 4, limit);
+        }
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            std::string pid = (const char*)sqlite3_column_text(stmt, 0);
+            int reactCnt = 0, cmtCnt = 0;
+            {
+                sqlite3_stmt* rStmt = nullptr;
+                if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM community_group_post_reactions WHERE post_id = ?;", -1, &rStmt, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(rStmt, 1, pid.c_str(), -1, SQLITE_STATIC);
+                    if (sqlite3_step(rStmt) == SQLITE_ROW) reactCnt = sqlite3_column_int(rStmt, 0);
+                    sqlite3_finalize(rStmt);
+                }
+                if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM community_group_post_comments WHERE post_id = ?;", -1, &rStmt, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(rStmt, 1, pid.c_str(), -1, SQLITE_STATIC);
+                    if (sqlite3_step(rStmt) == SQLITE_ROW) cmtCnt = sqlite3_column_int(rStmt, 0);
+                    sqlite3_finalize(rStmt);
+                }
+            }
+            std::string myReact;
+            {
+                sqlite3_stmt* mStmt = nullptr;
+                if (sqlite3_prepare_v2(db, "SELECT type FROM community_group_post_reactions WHERE post_id = ? AND user_id = ? LIMIT 1;", -1, &mStmt, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(mStmt, 1, pid.c_str(), -1, SQLITE_STATIC);
+                    sqlite3_bind_text(mStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+                    if (sqlite3_step(mStmt) == SQLITE_ROW && sqlite3_column_text(mStmt, 0))
+                        myReact = (const char*)sqlite3_column_text(mStmt, 0);
+                    sqlite3_finalize(mStmt);
+                }
+            }
+            arr.push_back({
+                {"id", pid},
+                {"group_id", (const char*)sqlite3_column_text(stmt, 1)},
+                {"group_name", (const char*)sqlite3_column_text(stmt, 2)},
+                {"author_id", (const char*)sqlite3_column_text(stmt, 3)},
+                {"author_name", (const char*)sqlite3_column_text(stmt, 4)},
+                {"author_avatar", sqlite3_column_text(stmt, 5) ? (const char*)sqlite3_column_text(stmt, 5) : "/img/default-avatar.svg"},
+                {"content", (const char*)sqlite3_column_text(stmt, 6)},
+                {"media_type", sqlite3_column_text(stmt, 7) ? (const char*)sqlite3_column_text(stmt, 7) : "NONE"},
+                {"media_url", sqlite3_column_text(stmt, 8) ? (const char*)sqlite3_column_text(stmt, 8) : ""},
+                {"approval_status", sqlite3_column_text(stmt, 9) ? (const char*)sqlite3_column_text(stmt, 9) : "APPROVED"},
+                {"created_at", (const char*)sqlite3_column_text(stmt, 10)},
+                {"user_token", sqlite3_column_text(stmt, 11) ? (const char*)sqlite3_column_text(stmt, 11) : ""},
+                {"reaction_count", reactCnt},
+                {"comments_count", cmtCnt},
+                {"my_reaction", myReact}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return arr;
+    }
+
+    json getCommunityGroupPendingPosts(const std::string& groupId, const std::string& adminId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json arr = json::array();
+        const char* check = "SELECT 1 FROM community_group_members WHERE group_id = ? AND user_id = ? AND role = 'ADMIN' LIMIT 1;";
+        sqlite3_stmt* cStmt = nullptr;
+        if (sqlite3_prepare_v2(db, check, -1, &cStmt, nullptr) != SQLITE_OK) return arr;
+        sqlite3_bind_text(cStmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(cStmt, 2, adminId.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(cStmt) != SQLITE_ROW) { sqlite3_finalize(cStmt); return arr; }
+        sqlite3_finalize(cStmt);
+        const char* sql = R"(
+            SELECT p.id, p.author_id, u.fullname, u.avatar, p.content, p.media_type, p.media_url, p.created_at
+            FROM community_group_posts p JOIN users u ON u.id = p.author_id
+            WHERE p.group_id = ? AND p.approval_status = 'PENDING'
+            ORDER BY p.created_at ASC;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return arr;
+        sqlite3_bind_text(stmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            arr.push_back({
+                {"id", (const char*)sqlite3_column_text(stmt, 0)},
+                {"author_id", (const char*)sqlite3_column_text(stmt, 1)},
+                {"author_name", (const char*)sqlite3_column_text(stmt, 2)},
+                {"author_avatar", sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : "/img/default-avatar.svg"},
+                {"content", (const char*)sqlite3_column_text(stmt, 4)},
+                {"media_type", sqlite3_column_text(stmt, 5) ? (const char*)sqlite3_column_text(stmt, 5) : "NONE"},
+                {"media_url", sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : ""},
+                {"created_at", (const char*)sqlite3_column_text(stmt, 7)},
+                {"approval_status", "PENDING"}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return arr;
+    }
+
+    bool reactCommunityGroupPost(const std::string& postId, const std::string& userId, const std::string& type) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        // Chỉ cho tương tác bài đã duyệt
+        const char* check = "SELECT approval_status FROM community_group_posts WHERE id = ? LIMIT 1;";
+        sqlite3_stmt* cStmt = nullptr;
+        if (sqlite3_prepare_v2(db, check, -1, &cStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(cStmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(cStmt) != SQLITE_ROW) { sqlite3_finalize(cStmt); return false; }
+        std::string st = (const char*)sqlite3_column_text(cStmt, 0);
+        sqlite3_finalize(cStmt);
+        if (st != "APPROVED") return false;
+
+        if (type.empty() || type == "NONE") {
+            const char* del = "DELETE FROM community_group_post_reactions WHERE post_id = ? AND user_id = ?;";
+            sqlite3_stmt* d = nullptr;
+            if (sqlite3_prepare_v2(db, del, -1, &d, nullptr) != SQLITE_OK) return false;
+            sqlite3_bind_text(d, 1, postId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(d, 2, userId.c_str(), -1, SQLITE_STATIC);
+            bool ok = sqlite3_step(d) == SQLITE_DONE;
+            sqlite3_finalize(d);
+            return ok;
+        }
+        std::string now = getCurrentTimeStr();
+        const char* sql = "INSERT OR REPLACE INTO community_group_post_reactions (post_id, user_id, type, created_at) VALUES (?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, type.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, now.c_str(), -1, SQLITE_STATIC);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool commentCommunityGroupPost(const std::string& postId, const std::string& authorId, const std::string& content, json& outComment) {
+        if (content.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* check = "SELECT approval_status FROM community_group_posts WHERE id = ? LIMIT 1;";
+        sqlite3_stmt* cStmt = nullptr;
+        if (sqlite3_prepare_v2(db, check, -1, &cStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(cStmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(cStmt) != SQLITE_ROW) { sqlite3_finalize(cStmt); return false; }
+        std::string st = (const char*)sqlite3_column_text(cStmt, 0);
+        sqlite3_finalize(cStmt);
+        if (st != "APPROVED") return false;
+
+        std::string id = "CGC" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+        std::string now = getCurrentTimeStr();
+        const char* sql = "INSERT INTO community_group_post_comments (id, post_id, author_id, content, created_at) VALUES (?, ?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, postId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, authorId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, content.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, now.c_str(), -1, SQLITE_STATIC);
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        if (!ok) return false;
+        outComment = {{"id", id}, {"post_id", postId}, {"author_id", authorId}, {"content", content}, {"created_at", now}};
+        return true;
+    }
+
+    json getCommunityGroupPostComments(const std::string& postId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        json arr = json::array();
+        const char* sql = R"(
+            SELECT c.id, c.author_id, u.fullname, u.avatar, c.content, c.created_at
+            FROM community_group_post_comments c JOIN users u ON u.id = c.author_id
+            WHERE c.post_id = ? ORDER BY c.created_at ASC;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return arr;
+        sqlite3_bind_text(stmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            arr.push_back({
+                {"id", (const char*)sqlite3_column_text(stmt, 0)},
+                {"author_id", (const char*)sqlite3_column_text(stmt, 1)},
+                {"author_name", (const char*)sqlite3_column_text(stmt, 2)},
+                {"author_avatar", sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : "/img/default-avatar.svg"},
+                {"content", (const char*)sqlite3_column_text(stmt, 4)},
+                {"created_at", (const char*)sqlite3_column_text(stmt, 5)}
+            });
+        }
+        sqlite3_finalize(stmt);
+        return arr;
+    }
+
+    // Chia sẻ bài nhóm ra bảng tin chính (tạo post PUBLIC)
+    bool shareCommunityGroupPostToFeed(const std::string& groupPostId, const std::string& userId, const std::string& thoughts, std::string& outPostId) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* q = "SELECT content, media_type, media_url, approval_status, group_id FROM community_group_posts WHERE id = ? LIMIT 1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, q, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, groupPostId.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) != SQLITE_ROW) { sqlite3_finalize(stmt); return false; }
+        std::string content = (const char*)sqlite3_column_text(stmt, 0);
+        std::string mediaType = sqlite3_column_text(stmt, 1) ? (const char*)sqlite3_column_text(stmt, 1) : "NONE";
+        std::string mediaUrl = sqlite3_column_text(stmt, 2) ? (const char*)sqlite3_column_text(stmt, 2) : "";
+        std::string status = (const char*)sqlite3_column_text(stmt, 3);
+        sqlite3_finalize(stmt);
+        if (status != "APPROVED") return false;
+
+        std::string shareText = thoughts.empty() ? ("Đã chia sẻ một bài từ nhóm:\n" + content) : (thoughts + "\n\n" + content);
+        std::string postId = "POST" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+        std::string now = getCurrentTimeStr();
+        const char* ins = "INSERT INTO posts (id, author_id, content, media_type, media_url, created_at, visibility) VALUES (?, ?, ?, ?, ?, ?, 'PUBLIC');";
+        sqlite3_stmt* inStmt = nullptr;
+        if (sqlite3_prepare_v2(db, ins, -1, &inStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(inStmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 3, shareText.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 4, mediaType.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 5, mediaUrl.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 6, now.c_str(), -1, SQLITE_STATIC);
+        bool ok = sqlite3_step(inStmt) == SQLITE_DONE;
+        sqlite3_finalize(inStmt);
+        if (ok) outPostId = postId;
+        return ok;
+    }
+
 };
