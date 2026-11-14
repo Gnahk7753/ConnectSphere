@@ -140,6 +140,12 @@ body {
   gap: 0.75rem;
 }
 
+.navbar.has-mobile-primary-nav #logoutBtn,
+.navbar.has-mobile-primary-nav .nav-right > a[href*="friends.html?tab=requests"]:not(.mobile-primary-link),
+.navbar.has-mobile-primary-nav .nav-right > a[href="messenger.html"]:not(.mobile-primary-link) {
+  display: none !important;
+}
+
 .btn-icon {
   width: 40px;
   height: 40px;
@@ -3279,7 +3285,7 @@ button.sidebar-nav-item {
   }
   .navbar.has-mobile-primary-nav .nav-right {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 2px;
     width: 100%;
     padding: 6px 0 4px;

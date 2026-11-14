@@ -9766,6 +9766,14 @@ function installMobilePrimaryNavigation() {
       </div>`;
     navLeft.append(mobileControls);
   }
+  const navControlsBreakpoint = window.matchMedia('(max-width: 768px)');
+  const placeMobileControls = () => {
+    const target = navControlsBreakpoint.matches ? navLeft : navRight;
+    if (mobileControls.parentElement !== target) target.append(mobileControls);
+  };
+  placeMobileControls();
+  navControlsBreakpoint.addEventListener('change', placeMobileControls);
+  window.addEventListener('resize', placeMobileControls, { passive: true });
 
   const menuToggle = mobileControls.querySelector('.mobile-menu-toggle');
   const mobileMenu = mobileControls.querySelector('.mobile-nav-menu');
@@ -9837,6 +9845,7 @@ function installMobilePrimaryNavigation() {
   const desktopLinks = [
     { href: 'index.html', key: 'index.html', label: 'Trang chủ', icon: '<path d="m3 10 9-7 9 7"></path><path d="M5 9v11h14V9M9 20v-6h6v6"></path>' },
     { href: 'friends.html', key: 'friends.html', label: 'Bạn bè', icon: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path>' },
+    { href: 'messenger.html', key: 'messenger.html', label: 'Tin nhắn', icon: '<path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8 8 0 0 1-3.5-.8L4 20l1.3-4A7.4 7.4 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"></path>' },
     { href: 'groups.html', key: 'groups.html', label: 'Nhóm', icon: '<path d="M3 7.5 12 3l9 4.5-9 4.5-9-4.5Z"></path><path d="M3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5"></path>' }
   ];
   let desktopNav = navbar.querySelector('.desktop-primary-nav');
@@ -9862,17 +9871,7 @@ function installMobilePrimaryNavigation() {
     logoutButton.innerHTML = '<svg class="nav-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 17l5-5-5-5"></path><path d="M15 12H3"></path><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7"></path></svg>';
   }
 
-  const mobileLinks = [
-    desktopLinks[1],
-    desktopLinks[2],
-    {
-      href: 'messenger.html',
-      key: 'messenger.html',
-      label: 'Tin nhắn',
-      icon: '<path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8 8 0 0 1-3.5-.8L4 20l1.3-4A7.4 7.4 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"></path>'
-    }
-  ];
-  mobileLinks.forEach(({ href, key, label, icon }) => {
+  desktopLinks.forEach(({ href, key, label, icon }) => {
     if (navRight.querySelector(`.mobile-primary-link[href="${href}"]`)) return;
     const link = document.createElement('a');
     link.className = 'mobile-primary-link';
@@ -9891,7 +9890,8 @@ function installMobilePrimaryNavigation() {
 
   navRight.querySelectorAll(':scope > *').forEach(child => {
     if (child.classList.contains('mobile-primary-link') ||
-        child === notificationWrapper || child === profileBadge) return;
+        child === notificationWrapper || child === profileBadge ||
+        child === mobileControls) return;
     child.classList.add('mobile-nav-hidden');
   });
 }
