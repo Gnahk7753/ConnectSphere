@@ -2010,6 +2010,13 @@ class AppClient {
     const postTime = document.getElementById('cmtPostTime');
     if (postTime) postTime.textContent = '🕒 ' + this.formatTimeAgo(post.created_at);
 
+    const postTitle = document.getElementById('cmtPostTitle');
+    if (postTitle) {
+      const hasTitle = typeof post.title === 'string' && post.title.trim().length > 0;
+      postTitle.textContent = hasTitle ? post.title : '';
+      postTitle.style.display = hasTitle ? 'block' : 'none';
+    }
+
     const postContent = document.getElementById('cmtPostContent');
     if (postContent) postContent.textContent = post.content;
 
@@ -2099,6 +2106,7 @@ class AppClient {
                 <div style="font-size:.78rem;color:var(--text-muted)" id="cmtPostTime">--</div>
               </div>
             </div>
+            <div class="comment-modal-post-title" id="cmtPostTitle" style="display:none;"></div>
             <div class="comment-modal-post-content" id="cmtPostContent"></div>
             <div class="comment-modal-post-media" id="cmtPostMedia"></div>
             <div class="comment-modal-stats">
@@ -9854,7 +9862,17 @@ function installMobilePrimaryNavigation() {
     logoutButton.innerHTML = '<svg class="nav-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 17l5-5-5-5"></path><path d="M15 12H3"></path><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7"></path></svg>';
   }
 
-  desktopLinks.filter(({ key }) => key !== 'index.html').forEach(({ href, key, label, icon }) => {
+  const mobileLinks = [
+    desktopLinks[1],
+    desktopLinks[2],
+    {
+      href: 'messenger.html',
+      key: 'messenger.html',
+      label: 'Tin nhắn',
+      icon: '<path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8 8 0 0 1-3.5-.8L4 20l1.3-4A7.4 7.4 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"></path>'
+    }
+  ];
+  mobileLinks.forEach(({ href, key, label, icon }) => {
     if (navRight.querySelector(`.mobile-primary-link[href="${href}"]`)) return;
     const link = document.createElement('a');
     link.className = 'mobile-primary-link';
