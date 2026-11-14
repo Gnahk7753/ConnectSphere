@@ -8517,70 +8517,75 @@ class AppClient {
   }
 
   openGoogleAuthModal() {
-    const list = document.getElementById('googleAccountsList');
-    if (list) {
-      const sampleAccounts = [
-        { email: 'gnahk7754@gmail.com', name: 'Clone', initial: 'C', color: '#137333' },
-        { email: 'khoanm@gmail.com', name: 'Nguyễn Minh Khoa', initial: 'K', color: '#1a73e8' },
-        { email: 'lanph@gmail.com', name: 'Phạm Hương Lan', initial: 'L', color: '#c5221f' }
-      ];
-      list.innerHTML = sampleAccounts.map(acc => `
-        <div class="google-account-row" onclick="app.selectGoogleAccount(${app.jsArg(acc.email)}, ${app.jsArg(acc.name)}, '')" style="display: flex; align-items: center; gap: 1rem; padding: 0.9rem 1rem; border-radius: 8px; cursor: pointer; transition: background 0.15s; border-bottom: 1px solid #282a2c;">
-          <div style="width: 36px; height: 36px; border-radius: 50%; background: ${acc.color}; color: #ffffff; display: flex; align-items: center; justify-content: center; font-weight: 500; font-size: 1.1rem; flex-shrink: 0;">
-            ${acc.initial}
-          </div>
-          <div>
-            <div style="font-weight: 500; font-size: 0.95rem; color: #ffffff;">${acc.name}</div>
-            <div style="font-size: 0.82rem; color: #9aa0a6;">${acc.email}</div>
-          </div>
-        </div>
-      `).join('');
-    }
     const modal = document.getElementById('googleAuthModal');
     if (modal) modal.style.display = 'flex';
-  }
-
-  promptCustomGoogleAccount() {
-    const email = prompt('Nhập địa chỉ email Google của bạn:', 'gnahk7754@gmail.com');
-    if (email && email.includes('@')) {
-      const name = email.split('@')[0];
-      this.selectGoogleAccount(email, name, '');
-    }
+    this.triggerRealGoogleSignIn();
   }
 
   async triggerRealGoogleSignIn() {
-    // Client ID lấy từ server (GOOGLE_CLIENT_ID trong .env), không còn hỏi người dùng nhập.
-    let clientId = '';
+    const button = document.getElementById('googleSignInButton');
+    if (!button) return;
+    button.innerHTML = '<span style="color:#5f6368;">Đang kết nối Google...</span>';
+
     try {
-      const r = await fetch('/api/auth/config');
+      const r = await fetch('/api/auth/config', { cache: 'no-store' });
+      if (!r.ok) throw new Error('Không lấy được cấu hình đăng nhập Google từ máy chủ.');
       const d = await r.json();
-      clientId = (d && d.google_client_id) || '';
-    } catch (_) {}
-    if (!clientId) {
-      this.showToast('Đăng nhập bằng Google chưa được bật trên máy chủ.', 'error');
-      return;
-    }
-    if (!(window.google && window.google.accounts && window.google.accounts.id)) {
-      this.showToast('Đang kết nối tới dịch vụ Google Identity, vui lòng thử lại sau giây lát!', 'info');
-      return;
-    }
-    try {
+      const clientId = (d && d.google_client_id) || '';
+      if (!clientId) {
+        button.innerHTML = '<span style="color:#b3261e;">Máy chủ chưa cấu hình Google Client ID.</span>';
+        this.showToast('Đăng nhập Google chưa được bật trên máy chủ.', 'error');
+        return;
+      }
+
+      if (!(window.google && window.google.accounts && window.google.accounts.id)) {
+        const script = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+        if (!script) throw new Error('Không tìm thấy Google Identity Services trên trang.');
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Tải Google Identity Services quá thời gian.')), 10000);
+          script.addEventListener('load', () => {
+            clearTimeout(timeout);
+            resolve();
+          }, { once: true });
+          script.addEventListener('error', () => {
+            clearTimeout(timeout);
+            reject(new Error('Trình duyệt không tải được Google Identity Services.'));
+          }, { once: true });
+        });
+      }
+
+      if (!(window.google && window.google.accounts && window.google.accounts.id)) {
+        throw new Error('Google Identity Services chưa sẵn sàng.');
+      }
+
       window.google.accounts.id.initialize({
         client_id: clientId,
-        callback: (resp) => this.handleGoogleCredentialResponse(resp)
+        callback: (response) => this.handleGoogleCredentialResponse(response),
+        ux_mode: 'popup'
       });
-      window.google.accounts.id.prompt((notification) => {
-        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          this.showToast('Google One Tap không thể hiển thị, hãy thử lại sau.', 'info');
-        }
+
+      button.innerHTML = '';
+      window.google.accounts.id.renderButton(button, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'continue_with',
+        shape: 'pill',
+        logo_alignment: 'left',
+        width: Math.min(320, button.clientWidth || 320)
       });
-    } catch (e) {
-      this.showToast('Lỗi Google Sign-In: ' + e.message, 'error');
+    } catch (error) {
+      console.error('Không thể khởi tạo đăng nhập Google:', error);
+      button.innerHTML = '<span style="color:#b3261e;">Không tải được đăng nhập Google. <button type="button" onclick="app.triggerRealGoogleSignIn()">Thử lại</button></span>';
+      this.showToast(error.message || 'Không thể kết nối dịch vụ Google.', 'error');
     }
   }
 
-  // Chỉ gửi ID token nguyên bản; server tự xác minh chữ ký/audience với Google (không tin email do client gửi)
   async handleGoogleCredentialResponse(response) {
+    if (!response || !response.credential) {
+      this.showToast('Google không trả về thông tin xác thực. Vui lòng thử lại.', 'error');
+      return;
+    }
     try {
       const res = await fetch('/api/auth/google-login', {
         method: 'POST',
@@ -8596,30 +8601,15 @@ class AppClient {
       } else {
         this.showToast(data.message || 'Lỗi đăng nhập Google!', 'error');
       }
-    } catch (e) {
-      this.showToast('Lỗi đăng nhập Google.', 'error');
+    } catch (error) {
+      console.error('Đăng nhập Google thất bại:', error);
+      this.showToast('Không thể gửi thông tin xác thực đến máy chủ.', 'error');
     }
   }
 
   closeGoogleAuthModal() {
     const modal = document.getElementById('googleAuthModal');
     if (modal) modal.style.display = 'none';
-  }
-
-  submitCustomGoogleAccount() {
-    const input = document.getElementById('customGoogleEmail');
-    const email = input ? input.value.trim() : '';
-    if (!email) {
-      this.showToast('Vui lòng nhập địa chỉ Gmail!', 'error');
-      return;
-    }
-    const name = email.split('@')[0];
-    this.selectGoogleAccount(email, name, '/img/default-avatar.svg');
-  }
-
-  async selectGoogleAccount() {
-    // Luồng "chọn/nhập email Google" kiểu demo đã bị gỡ vì cho phép đăng nhập vào tài khoản của bất kỳ ai chỉ bằng địa chỉ email.
-    this.showToast('Hãy dùng nút "Đăng nhập bằng Google" chính thức.', 'error');
   }
 
   // =========================================================================
