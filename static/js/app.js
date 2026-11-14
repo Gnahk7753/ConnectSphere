@@ -9717,15 +9717,97 @@ function installMobilePrimaryNavigation() {
 
   navbar.classList.add('has-mobile-primary-nav');
 
-  if (!navLeft.querySelector('.mobile-primary-search')) {
-    const searchLink = document.createElement('a');
-    searchLink.className = 'mobile-primary-search';
-    searchLink.href = 'search.html';
-    searchLink.title = 'Tìm kiếm';
-    searchLink.setAttribute('aria-label', 'Tìm kiếm');
-    searchLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></svg>';
-    navLeft.append(searchLink);
+  let searchWrapper = navLeft.querySelector('.search-box-wrapper');
+  if (!searchWrapper) {
+    searchWrapper = document.createElement('div');
+    searchWrapper.className = 'search-box-wrapper';
+    searchWrapper.innerHTML = `
+      <div class="search-box">
+        <span aria-hidden="true">🔍</span>
+        <input type="text" id="searchInput" placeholder="Tìm kiếm bạn bè, nhóm, bài viết..." autocomplete="off"
+               oninput="app.handleSearchInput(this.value)"
+               onkeydown="if(event.key === 'Enter') app.navigateToSearchPage(this.value)">
+      </div>
+      <div class="search-suggestions-dropdown" id="searchSuggestionsDropdown" style="display:none;"></div>`;
+    navLeft.append(searchWrapper);
   }
+  searchWrapper.classList.add('mobile-search-panel');
+  navLeft.querySelector('.mobile-primary-search')?.remove();
+
+  let mobileControls = navLeft.querySelector('.mobile-nav-controls');
+  if (!mobileControls) {
+    mobileControls = document.createElement('div');
+    mobileControls.className = 'mobile-nav-controls';
+    mobileControls.innerHTML = `
+      <button type="button" class="mobile-nav-action mobile-menu-toggle" aria-label="Mở menu" aria-expanded="false" aria-controls="mobilePrimaryMenu" title="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"></path></svg>
+      </button>
+      <button type="button" class="mobile-nav-action mobile-search-toggle" aria-label="Mở tìm kiếm" aria-expanded="false" title="Tìm kiếm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></svg>
+      </button>
+      <div class="mobile-nav-menu" id="mobilePrimaryMenu" role="menu">
+        <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); app.openEditProfileModal()">
+          <span aria-hidden="true">✏️</span> Chỉnh sửa hồ sơ
+        </button>
+        <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); document.getElementById('themeToggleBtn')?.click()">
+          <span aria-hidden="true">🌙</span> Đổi chế độ sáng/tối
+        </button>
+        <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); document.getElementById('logoutBtn')?.click()">
+          <span aria-hidden="true">↪</span> Đăng xuất
+        </button>
+      </div>`;
+    navLeft.append(mobileControls);
+  }
+
+  const menuToggle = mobileControls.querySelector('.mobile-menu-toggle');
+  const mobileMenu = mobileControls.querySelector('.mobile-nav-menu');
+  menuToggle?.addEventListener('click', event => {
+    event.stopPropagation();
+    const isOpen = mobileMenu?.classList.toggle('show') || false;
+    menuToggle.setAttribute('aria-expanded', String(isOpen));
+    menuToggle.setAttribute('aria-label', isOpen ? 'Đóng menu' : 'Mở menu');
+  });
+  mobileControls.querySelector('.mobile-search-toggle')?.addEventListener('click', () => {
+    const isOpen = navbar.classList.toggle('mobile-search-open');
+    const searchToggle = mobileControls.querySelector('.mobile-search-toggle');
+    searchToggle?.setAttribute('aria-expanded', String(isOpen));
+    searchToggle?.setAttribute('aria-label', isOpen ? 'Đóng tìm kiếm' : 'Mở tìm kiếm');
+    mobileMenu?.classList.remove('show');
+    menuToggle?.setAttribute('aria-expanded', 'false');
+    menuToggle?.setAttribute('aria-label', 'Mở menu');
+    if (isOpen) navLeft.querySelector('#searchInput')?.focus();
+    else {
+      const suggestions = navLeft.querySelector('#searchSuggestionsDropdown');
+      if (suggestions) suggestions.style.display = 'none';
+    }
+  });
+  mobileMenu?.querySelectorAll('button').forEach(button => {
+    button.addEventListener('click', () => {
+      menuToggle?.setAttribute('aria-expanded', 'false');
+      menuToggle?.setAttribute('aria-label', 'Mở menu');
+    });
+  });
+  navLeft.querySelector('#searchInput')?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      navbar.classList.remove('mobile-search-open');
+      mobileControls.querySelector('.mobile-search-toggle')?.setAttribute('aria-expanded', 'false');
+      mobileControls.querySelector('.mobile-search-toggle')?.setAttribute('aria-label', 'Mở tìm kiếm');
+    }
+  });
+  document.addEventListener('click', event => {
+    if (!mobileControls.contains(event.target)) {
+      mobileMenu?.classList.remove('show');
+      menuToggle?.setAttribute('aria-expanded', 'false');
+      menuToggle?.setAttribute('aria-label', 'Mở menu');
+    }
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      mobileMenu?.classList.remove('show');
+      menuToggle?.setAttribute('aria-expanded', 'false');
+      menuToggle?.setAttribute('aria-label', 'Mở menu');
+    }
+  });
 
   const profileBadge = navRight.querySelector('#navUserBadge');
   const logoutButton = navRight.querySelector('#logoutBtn');
@@ -9744,6 +9826,22 @@ function installMobilePrimaryNavigation() {
     navRight.insertBefore(notificationWrapper, profileBadge || logoutButton || null);
   }
 
+  const desktopLinks = [
+    { href: 'index.html', key: 'index.html', label: 'Trang chủ', icon: '<path d="m3 10 9-7 9 7"></path><path d="M5 9v11h14V9M9 20v-6h6v6"></path>' },
+    { href: 'friends.html', key: 'friends.html', label: 'Bạn bè', icon: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path>' },
+    { href: 'groups.html', key: 'groups.html', label: 'Nhóm', icon: '<path d="M3 7.5 12 3l9 4.5-9 4.5-9-4.5Z"></path><path d="M3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5"></path>' }
+  ];
+  let desktopNav = navbar.querySelector('.desktop-primary-nav');
+  if (!desktopNav) {
+    desktopNav = document.createElement('nav');
+    desktopNav.className = 'desktop-primary-nav';
+    desktopNav.setAttribute('aria-label', 'Điều hướng chính');
+    desktopNav.innerHTML = desktopLinks.map(({ href, key, label, icon }) =>
+      `<a href="${href}" title="${label}" aria-label="${label}"${page === key ? ' class="active" aria-current="page"' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg></a>`
+    ).join('');
+    navbar.insertBefore(desktopNav, navRight);
+  }
+
   const notificationButton = notificationWrapper.querySelector('#notificationBtn');
   if (notificationButton) {
     const unreadBadge = notificationButton.querySelector('.badge-counter')?.outerHTML || '';
@@ -9756,13 +9854,7 @@ function installMobilePrimaryNavigation() {
     logoutButton.innerHTML = '<svg class="nav-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 17l5-5-5-5"></path><path d="M15 12H3"></path><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7"></path></svg>';
   }
 
-  const links = [
-    { href: 'index.html', key: 'index.html', label: 'Trang chủ', icon: '<path d="m3 10 9-7 9 7"></path><path d="M5 9v11h14V9M9 20v-6h6v6"></path>' },
-    { href: 'friends.html', key: 'friends.html', label: 'Bạn bè', icon: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path>' },
-    { href: 'groups.html', key: 'groups.html', label: 'Nhóm', icon: '<path d="M3 7.5 12 3l9 4.5-9 4.5-9-4.5Z"></path><path d="M3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5"></path>' }
-  ];
-
-  links.forEach(({ href, key, label, icon }) => {
+  desktopLinks.filter(({ key }) => key !== 'index.html').forEach(({ href, key, label, icon }) => {
     if (navRight.querySelector(`.mobile-primary-link[href="${href}"]`)) return;
     const link = document.createElement('a');
     link.className = 'mobile-primary-link';
@@ -9777,13 +9869,11 @@ function installMobilePrimaryNavigation() {
     navRight.insertBefore(link, notificationWrapper);
   });
 
-  const searchLink = navLeft.querySelector('.mobile-primary-search');
-  if (page === 'search.html') searchLink?.classList.add('active');
   if (page === 'profile.html') profileBadge?.classList.add('mobile-profile-current');
 
   navRight.querySelectorAll(':scope > *').forEach(child => {
     if (child.classList.contains('mobile-primary-link') ||
-        child === notificationWrapper || child === profileBadge || child === logoutButton) return;
+        child === notificationWrapper || child === profileBadge) return;
     child.classList.add('mobile-nav-hidden');
   });
 }
