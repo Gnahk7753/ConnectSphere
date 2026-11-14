@@ -15,9 +15,10 @@ add_executable(server
 target_include_directories(server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${SQLite3_INCLUDE_DIRS}
 )
 
-target_link_libraries(server PRIVATE SQLite3::SQLite3 Threads::Threads nlohmann_json::nlohmann_json)
+target_link_libraries(server PRIVATE ${SQLite3_LIBRARIES} Threads::Threads nlohmann_json::nlohmann_json)
 
 if(WIN32)
     target_link_libraries(server PRIVATE ws2_32 crypt32 advapi32)
