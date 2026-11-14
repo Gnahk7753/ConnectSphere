@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <path d="M14 20C14 11.1634 21.1634 4 30 4H70C78.8366 4 86 11.1634 86 20V62C86 70.8366 78.8366 78 70 78H36L14 94L20 78H30C21.1634 78 14 70.8366 14 62V20Z" fill="#6c2bd9"/>
+  <line x1="50" y1="28" x2="30" y2="58" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="30" y1="58" x2="70" y2="58" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="70" y1="58" x2="50" y2="28" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="50" cy="28" r="10" fill="#f59e0b"/>
+  <circle cx="50" cy="28" r="4.5" fill="#fff"/>
+  <circle cx="30" cy="58" r="10" fill="#ec4899"/>
+  <circle cx="30" cy="58" r="4.5" fill="#fff"/>
+  <circle cx="70" cy="58" r="10" fill="#10b981"/>
+  <circle cx="70" cy="58" r="4.5" fill="#fff"/>
+</svg>

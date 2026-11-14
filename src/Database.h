@@ -892,6 +892,15 @@ private:
                 created_at TEXT NOT NULL
             );
         )");
+        executeSimple(R"(
+            CREATE TABLE IF NOT EXISTS community_group_comment_reactions (
+                comment_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (comment_id, user_id)
+            );
+        )");
     }
 
     void seedDataIfEmpty() {
@@ -5890,17 +5899,20 @@ public:
         return true;
     }
 
-    json getCommunityGroupPostComments(const std::string& postId) {
+    json getCommunityGroupPostComments(const std::string& postId, const std::string& userId = "") {
         std::lock_guard<std::mutex> lock(dbMutex);
         json arr = json::array();
         const char* sql = R"(
-            SELECT c.id, c.author_id, u.fullname, u.avatar, c.content, c.created_at
+            SELECT c.id, c.author_id, u.fullname, u.avatar, c.content, c.created_at,
+                   (SELECT COUNT(*) FROM community_group_comment_reactions r WHERE r.comment_id = c.id),
+                   (SELECT type FROM community_group_comment_reactions r WHERE r.comment_id = c.id AND r.user_id = ? LIMIT 1)
             FROM community_group_post_comments c JOIN users u ON u.id = c.author_id
             WHERE c.post_id = ? ORDER BY c.created_at ASC;
         )";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return arr;
-        sqlite3_bind_text(stmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, postId.c_str(), -1, SQLITE_STATIC);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             arr.push_back({
                 {"id", (const char*)sqlite3_column_text(stmt, 0)},
@@ -5908,11 +5920,121 @@ public:
                 {"author_name", (const char*)sqlite3_column_text(stmt, 2)},
                 {"author_avatar", sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : "/img/default-avatar.svg"},
                 {"content", (const char*)sqlite3_column_text(stmt, 4)},
-                {"created_at", (const char*)sqlite3_column_text(stmt, 5)}
+                {"created_at", (const char*)sqlite3_column_text(stmt, 5)},
+                {"total_reactions", sqlite3_column_int(stmt, 6)},
+                {"my_reaction", sqlite3_column_text(stmt, 7) ? (const char*)sqlite3_column_text(stmt, 7) : ""}
             });
         }
         sqlite3_finalize(stmt);
         return arr;
+    }
+
+    bool reactCommunityGroupComment(const std::string& commentId, const std::string& userId, const std::string& type) {
+        if (commentId.empty() || userId.empty()) return false;
+        static const std::set<std::string> validTypes = {"LIKE", "LOVE", "HAHA", "WOW", "SAD", "ANGRY", "NONE"};
+        if (!validTypes.count(type)) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* checkSql = R"(
+            SELECT p.approval_status FROM community_group_post_comments c
+            JOIN community_group_posts p ON p.id = c.post_id
+            WHERE c.id = ? LIMIT 1;
+        )";
+        sqlite3_stmt* checkStmt = nullptr;
+        if (sqlite3_prepare_v2(db, checkSql, -1, &checkStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(checkStmt, 1, commentId.c_str(), -1, SQLITE_STATIC);
+        const bool canReact = sqlite3_step(checkStmt) == SQLITE_ROW &&
+            std::string(reinterpret_cast<const char*>(sqlite3_column_text(checkStmt, 0))) == "APPROVED";
+        sqlite3_finalize(checkStmt);
+        if (!canReact) return false;
+
+        if (type == "NONE") {
+            const char* deleteSql = "DELETE FROM community_group_comment_reactions WHERE comment_id = ? AND user_id = ?;";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, deleteSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+            sqlite3_bind_text(stmt, 1, commentId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+            sqlite3_finalize(stmt);
+            return ok;
+        }
+
+        const char* insertSql = "INSERT OR REPLACE INTO community_group_comment_reactions (comment_id, user_id, type, created_at) VALUES (?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, insertSql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        const std::string now = getCurrentTimeStr();
+        sqlite3_bind_text(stmt, 1, commentId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, type.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, now.c_str(), -1, SQLITE_STATIC);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool deleteCommunityGroupPost(const std::string& postId, const std::string& userId) {
+        if (postId.empty() || userId.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* ownerSql = "SELECT group_id, author_id FROM community_group_posts WHERE id = ? LIMIT 1;";
+        sqlite3_stmt* ownerStmt = nullptr;
+        if (sqlite3_prepare_v2(db, ownerSql, -1, &ownerStmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(ownerStmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(ownerStmt) != SQLITE_ROW) {
+            sqlite3_finalize(ownerStmt);
+            return false;
+        }
+        const std::string groupId = reinterpret_cast<const char*>(sqlite3_column_text(ownerStmt, 0));
+        const std::string authorId = reinterpret_cast<const char*>(sqlite3_column_text(ownerStmt, 1));
+        sqlite3_finalize(ownerStmt);
+
+        if (authorId != userId) {
+            const char* adminSql = "SELECT 1 FROM community_group_members WHERE group_id = ? AND user_id = ? AND role = 'ADMIN' LIMIT 1;";
+            sqlite3_stmt* adminStmt = nullptr;
+            if (sqlite3_prepare_v2(db, adminSql, -1, &adminStmt, nullptr) != SQLITE_OK) return false;
+            sqlite3_bind_text(adminStmt, 1, groupId.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(adminStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
+            const bool isAdmin = sqlite3_step(adminStmt) == SQLITE_ROW;
+            sqlite3_finalize(adminStmt);
+            if (!isAdmin) return false;
+        }
+
+        if (sqlite3_exec(db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) return false;
+        auto deleteByPostId = [&](const char* sql) {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+            sqlite3_bind_text(stmt, 1, postId.c_str(), -1, SQLITE_STATIC);
+            const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+            sqlite3_finalize(stmt);
+            return ok;
+        };
+        const bool relatedDeleted =
+            deleteByPostId("DELETE FROM community_group_comment_reactions WHERE comment_id IN (SELECT id FROM community_group_post_comments WHERE post_id = ?);") &&
+            deleteByPostId("DELETE FROM community_group_post_comments WHERE post_id = ?;") &&
+            deleteByPostId("DELETE FROM community_group_post_reactions WHERE post_id = ?;");
+        const bool postDeleted = relatedDeleted &&
+            deleteByPostId("DELETE FROM community_group_posts WHERE id = ?;");
+        if (!postDeleted || sqlite3_changes(db) != 1) {
+            sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            return false;
+        }
+        if (sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr) != SQLITE_OK) {
+            sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            return false;
+        }
+        return true;
+    }
+
+    bool editCommunityGroupPost(const std::string& postId, const std::string& userId, const std::string& content) {
+        if (postId.empty() || userId.empty() || content.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        const char* sql = "UPDATE community_group_posts SET content = ? WHERE id = ? AND author_id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+        sqlite3_bind_text(stmt, 1, content.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, postId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        sqlite3_finalize(stmt);
+        return ok;
     }
 
     // Chia sẻ bài nhóm ra bảng tin chính (tạo post PUBLIC)

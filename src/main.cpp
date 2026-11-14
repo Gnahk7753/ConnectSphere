@@ -2994,6 +2994,45 @@ int main() {
         }
     });
 
+    R.Post("/api/community-groups/posts/delete", [&db](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            const std::string postId = body.value("post_id", "");
+            const std::string userId = body.value("user_id", "");
+            if (postId.empty() || userId.empty()) {
+                sendJsonError(res, 400, "Thiếu post_id hoặc user_id.");
+                return;
+            }
+            if (!db.deleteCommunityGroupPost(postId, userId)) {
+                sendJsonError(res, 403, "Bạn không có quyền xóa bài viết này hoặc bài viết không còn tồn tại.");
+                return;
+            }
+            res.set_content(json({{"status", "ok"}, {"message", "Đã xóa bài viết."}}).dump(), "application/json; charset=utf-8");
+        } catch (const std::exception&) {
+            sendJsonError(res, 400, "Dữ liệu yêu cầu không hợp lệ.");
+        }
+    });
+
+    R.Post("/api/community-groups/posts/edit", [&db](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            const std::string postId = body.value("post_id", "");
+            const std::string userId = body.value("user_id", "");
+            const std::string content = trimStr(body.value("content", ""));
+            if (postId.empty() || userId.empty() || content.empty()) {
+                sendJsonError(res, 400, "Vui lòng nhập nội dung bài viết.");
+                return;
+            }
+            if (!db.editCommunityGroupPost(postId, userId, content)) {
+                sendJsonError(res, 403, "Bạn không có quyền sửa bài viết này hoặc bài viết không còn tồn tại.");
+                return;
+            }
+            res.set_content(json({{"status", "ok"}, {"message", "Đã cập nhật bài viết."}}).dump(), "application/json; charset=utf-8");
+        } catch (const std::exception&) {
+            sendJsonError(res, 400, "Dữ liệu yêu cầu không hợp lệ.");
+        }
+    });
+
     R.Get("/api/community-groups/posts/pending", [&db](const httplib::Request& req, httplib::Response& res) {
         std::string groupId = req.get_param_value("group_id");
         std::string adminId = req.get_param_value("admin_id");
@@ -3020,7 +3059,24 @@ int main() {
 
     R.Get("/api/community-groups/posts/comments", [&db](const httplib::Request& req, httplib::Response& res) {
         std::string postId = req.get_param_value("post_id");
-        res.set_content(json({{"status", "ok"}, {"comments", db.getCommunityGroupPostComments(postId)}}).dump(), "application/json; charset=utf-8");
+        std::string userId = req.get_param_value("user_id");
+        res.set_content(json({{"status", "ok"}, {"comments", db.getCommunityGroupPostComments(postId, userId)}}).dump(), "application/json; charset=utf-8");
+    });
+
+    R.Post("/api/community-groups/posts/comments/reaction", [&db](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            const std::string commentId = body.value("comment_id", "");
+            const std::string userId = body.value("user_id", "");
+            const std::string type = body.value("type", "LIKE");
+            if (!db.reactCommunityGroupComment(commentId, userId, type)) {
+                sendJsonError(res, 400, "Không thể cập nhật cảm xúc bình luận.");
+                return;
+            }
+            res.set_content(json({{"status", "ok"}}).dump(), "application/json; charset=utf-8");
+        } catch (const std::exception&) {
+            sendJsonError(res, 400, "Dữ liệu yêu cầu không hợp lệ.");
+        }
     });
 
     R.Post("/api/community-groups/posts/comment", [&db](const httplib::Request& req, httplib::Response& res) {
