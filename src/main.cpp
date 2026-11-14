@@ -1540,12 +1540,21 @@ int main() {
             std::string replyToId = body.value("reply_to_id", "");
             std::string replyToAuthor = body.value("reply_to_author", "");
 
-            // Hỗ trợ bình luận GIF: lưu dạng __GIF__:<url>
-            if (content.empty() && !mediaUrl.empty()) {
-                content = std::string("__GIF__:") + mediaUrl;
-            } else if (!mediaUrl.empty() && (mediaType == "IMAGE" || mediaType == "GIF")) {
-                if (content.empty()) content = std::string("__GIF__:") + mediaUrl;
-                else content = content + "\n__GIF__:" + mediaUrl;
+            if (!mediaUrl.empty()) {
+                if (mediaType == "IMAGE" || mediaType == "VIDEO") {
+                    std::string mediaError;
+                    if (!validatePostMedia(mediaType, mediaUrl, mediaError)) {
+                        sendJsonError(res, 400, mediaError);
+                        return;
+                    }
+                } else if (mediaType != "GIF") {
+                    sendJsonError(res, 400, "Loại tệp đính kèm bình luận không hợp lệ.");
+                    return;
+                }
+                const std::string marker = mediaType == "GIF" ? "__GIF__:"
+                    : (mediaType == "VIDEO" ? "__MEDIA_VIDEO__:" : "__MEDIA_IMAGE__:");
+                if (!content.empty()) content += "\n";
+                content += marker + mediaUrl;
             }
 
             if (content.empty()) {
@@ -3092,7 +3101,23 @@ int main() {
             std::string authorId = body.value("author_id", "");
             std::string content = body.value("content", "");
             std::string mediaUrl = body.value("media_url", "");
-            if (content.empty() && !mediaUrl.empty()) content = std::string("__GIF__:") + mediaUrl;
+            const std::string mediaType = body.value("media_type", "");
+            if (!mediaUrl.empty()) {
+                if (mediaType == "IMAGE" || mediaType == "VIDEO") {
+                    std::string mediaError;
+                    if (!validatePostMedia(mediaType, mediaUrl, mediaError)) {
+                        sendJsonError(res, 400, mediaError);
+                        return;
+                    }
+                } else if (mediaType != "GIF") {
+                    sendJsonError(res, 400, "Loại tệp đính kèm bình luận không hợp lệ.");
+                    return;
+                }
+                const std::string marker = mediaType == "GIF" ? "__GIF__:"
+                    : (mediaType == "VIDEO" ? "__MEDIA_VIDEO__:" : "__MEDIA_IMAGE__:");
+                if (!content.empty()) content += "\n";
+                content += marker + mediaUrl;
+            }
             json out;
             if (db.commentCommunityGroupPost(postId, authorId, content, out)) {
                 res.set_content(json({{"status", "ok"}, {"comment", out}}).dump(), "application/json; charset=utf-8");

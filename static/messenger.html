@@ -142,14 +142,13 @@
             📎
             <input type="file" id="chatMediaInput" accept="image/*,video/*" style="display:none" onchange="app.handleChatMediaUpload(this)">
           </label>
-          <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
           <div class="chat-composer-emoji-wrap">
             <button type="button" class="chat-composer-emoji-trigger" title="Biểu tượng cảm xúc" onclick="app.toggleComposerEmojiPicker(event)">🙂</button>
-            <button type="button" class="chat-composer-emoji-trigger" title="GIF" onclick="app.openGifPicker('chat')" style="font-size:0.72rem;font-weight:700;color:#0084ff;">GIF</button>
+            <button type="button" class="chat-composer-emoji-trigger" title="GIF" onclick="app.openGifPicker('chat')">GIF</button>
             <div class="chat-composer-emoji-picker" id="chatEmojiPickerComposer"></div>
           </div>
+          <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
           <button type="button" class="chat-composer-like" title="Gửi nhanh 👍">👍</button>
-          <button onclick="app.sendChatMessage()">➤</button>
         </div>
       </div>
     </section>

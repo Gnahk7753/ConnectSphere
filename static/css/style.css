@@ -6375,7 +6375,130 @@ button.sidebar-nav-item {
 }
 .gif-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gif-loading { grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 20px; }
-.comment-gif { max-width: 220px; border-radius: 10px; }
+.gif-empty,
+.gif-error {
+  grid-column: 1 / -1;
+  padding: 1rem;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 0.88rem;
+}
+.gif-error { color: var(--accent-red); }
+.gif-picker-attribution {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-align: right;
+}
+.comment-gif,
+.comment-image,
+.comment-video {
+  display: block;
+  max-width: min(320px, 100%);
+  max-height: 300px;
+  margin-top: 4px;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.comment-compose-field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--bg-surface-secondary);
+}
+.comment-compose-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-sizing: border-box;
+}
+.comment-compose-field input:focus {
+  border: 0;
+  background: transparent;
+}
+.comment-compose-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.comment-compose-tools button,
+.comment-compose-tools label {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+.comment-compose-tools button:hover,
+.comment-compose-tools label:hover {
+  background: var(--bg-surface-hover);
+  color: var(--primary);
+}
+.comment-compose-tools input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+.comment-attachment-preview {
+  position: relative;
+  width: fit-content;
+  max-width: min(320px, calc(100% - 48px));
+  margin: 0.55rem 0 0 48px;
+}
+.comment-attachment-preview img,
+.comment-attachment-preview video {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: 10px;
+  object-fit: contain;
+}
+.comment-media-remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  cursor: pointer;
+  font-size: 1.15rem;
+}
+
+.chat-composer-emoji-picker {
+  right: auto;
+  left: 0;
+}
+.chat-composer-like.is-send-mode svg {
+  width: 20px;
+  height: 20px;
+}
+
+.nav-monochrome-icon {
+  color: var(--text-muted);
+}
+.nav-action-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
 
 
 /* ================= SEARCH PEOPLE CARDS ================= */

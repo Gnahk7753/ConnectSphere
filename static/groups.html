@@ -154,7 +154,6 @@
           <div style="display:flex;gap:8px;">
             <label class="btn-attach" style="cursor:pointer;">📷 Ảnh<input type="file" id="groupImageFile" accept="image/*" style="display:none" onchange="groupsPage.handleImage(this)"></label>
             <label class="btn-attach" style="cursor:pointer;">🎥 Video<input type="file" id="groupVideoFile" accept="video/*" style="display:none" onchange="groupsPage.handleVideo(this)"></label>
-            <button type="button" class="btn-attach" onclick="groupsPage.pendingGifTarget='group'; app.openGifPicker('post'); setTimeout(()=>{},0)">GIF</button>
           </div>
           <button class="btn-primary" onclick="groupsPage.submitPost()">Đăng bài</button>
         </div>
@@ -232,9 +231,19 @@
       <div class="comment-modal-footer">
         <div class="comment-input-row">
           <img id="groupCommentMyAvatar" src="/img/default-avatar.svg" alt="Ảnh đại diện của bạn">
-          <input id="groupCommentInput" type="text" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') groupsPage.sendGroupComment()">
+          <div class="comment-compose-field">
+            <input id="groupCommentInput" type="text" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') groupsPage.sendGroupComment()">
+            <div class="comment-compose-tools">
+              <button type="button" title="Biểu tượng cảm xúc" aria-label="Biểu tượng cảm xúc" onclick="app.openCommentEmojiPicker('groupCommentInput')">🙂</button>
+              <label title="Chọn ảnh hoặc video" aria-label="Chọn ảnh hoặc video">📷
+                <input type="file" id="groupCommentMediaInput" accept="image/*,video/*" onchange="app.handleCommentMedia(this, 'groupCommentMediaPreview')">
+              </label>
+              <button type="button" title="Chọn GIF từ GIPHY" aria-label="Chọn GIF" onclick="app.openGifPicker('group-comment')">GIF</button>
+            </div>
+          </div>
           <button type="button" aria-label="Gửi bình luận" onclick="groupsPage.sendGroupComment()">➤</button>
         </div>
+        <div class="comment-attachment-preview" id="groupCommentMediaPreview" style="display:none;"></div>
       </div>
     </div>
   </div>
@@ -752,6 +761,7 @@
       async openGroupComments(postId) {
         const post = this.postsById.get(postId);
         if (!post) return;
+        app.clearCommentMedia('groupCommentMediaPreview', 'groupCommentMediaInput');
         this.activeCommentPostId = postId;
         document.getElementById('groupCommentTitle').textContent = `Bài viết của ${post.author_name || ''}`;
         document.getElementById('groupCommentPostAvatar').src = post.author_avatar || '/img/default-avatar.svg';
@@ -774,6 +784,7 @@
       closeGroupComments() {
         document.getElementById('groupCommentModal').style.display = 'none';
         this.activeCommentPostId = null;
+        app.clearCommentMedia('groupCommentMediaPreview', 'groupCommentMediaInput');
       },
 
       async loadGroupComments(postId) {
@@ -857,16 +868,24 @@
         const postId = this.activeCommentPostId;
         const input = document.getElementById('groupCommentInput');
         const content = input.value.trim();
-        if (!postId || !content) return;
+        const media = app.pendingCommentMedia || { type: 'NONE', url: '' };
+        if (!postId || (!content && !media.url)) return;
         try {
           const res = await fetch('/api/community-groups/posts/comment', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ post_id: postId, author_id: app.currentUser.id, content })
+            body: JSON.stringify({
+              post_id: postId,
+              author_id: app.currentUser.id,
+              content,
+              media_type: media.type,
+              media_url: media.url
+            })
           });
           const data = await res.json();
           if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Không thể gửi bình luận.');
           input.value = '';
+          app.clearCommentMedia('groupCommentMediaPreview', 'groupCommentMediaInput');
           const post = this.postsById.get(postId);
           if (post) {
             post.comments_count = (Number(post.comments_count) || 0) + 1;
@@ -877,6 +896,11 @@
           console.error('Không thể gửi bình luận bài viết nhóm:', error);
           app.showToast(error.message || 'Không thể gửi bình luận.', 'error');
         }
+      },
+
+      async sendGroupCommentGif(gifUrl) {
+        app.pendingCommentMedia = { type: 'GIF', url: gifUrl };
+        await this.sendGroupComment();
       },
 
       openEditPost(postId) {

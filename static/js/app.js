@@ -56,6 +56,7 @@ class AppClient {
     this.otpTimerInterval = null;
     this.tempRegisterData = null;
     this.currentMedia = { type: 'NONE', url: '' };
+    this.pendingCommentMedia = null;
     this.shareTargetPostId = null;
     this.heartbeatInterval = null;
     this.searchDebounceTimer = null;
@@ -839,6 +840,7 @@ class AppClient {
     document.addEventListener('pointerdown', (event) => {
       const button = event.target.closest('.chat-composer-like');
       if (!button || event.button !== 0) return;
+      if (button.classList.contains('is-send-mode')) return;
       event.preventDefault();
       this.clearQuickEmojiPressTimers();
       this.quickEmojiPressState = { button, startedAt: Date.now(), size: 1 };
@@ -862,6 +864,10 @@ class AppClient {
       const button = event.target.closest('.chat-composer-like');
       if (!button) return;
       event.preventDefault();
+      if (button.classList.contains('is-send-mode')) {
+        this.sendChatMessage();
+        return;
+      }
       if (Date.now() >= this.suppressQuickEmojiClickUntil) this.sendChatLike(1);
     });
   }
@@ -916,9 +922,17 @@ class AppClient {
   }
 
   updateQuickReactionButton() {
+    const input = document.getElementById('chatInput');
+    const isSendMode = !!input?.value.trim();
     document.querySelectorAll('.chat-composer-like').forEach(button => {
-      button.textContent = this.quickReactionEmoji || '👍';
-      button.title = `Gửi nhanh ${this.quickReactionEmoji || '👍'} (nhấn giữ để phóng to)`;
+      button.classList.toggle('is-send-mode', isSendMode);
+      if (isSendMode) {
+        button.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h15"></path><path d="m13 5 7 7-7 7"></path></svg>';
+        button.title = 'Gửi tin nhắn';
+      } else {
+        button.textContent = this.quickReactionEmoji || '👍';
+        button.title = `Gửi nhanh ${this.quickReactionEmoji || '👍'} (nhấn giữ để phóng to)`;
+      }
       button.setAttribute('aria-label', button.title);
     });
   }
@@ -1946,6 +1960,7 @@ class AppClient {
     this.activeModalPostId = postId;
     this.cancelReplyComment();
     const modal = this.ensureCommentModal();
+    this.clearCommentMedia();
 
     try {
       const res = await fetch(`/api/posts/detail?id=${encodeURIComponent(postId)}&current_user_id=${this.currentUser ? this.currentUser.id : ''}`);
@@ -1966,6 +1981,7 @@ class AppClient {
     if (modal) modal.style.display = 'none';
     this.activeModalPostId = null;
     this.cancelReplyComment();
+    this.clearCommentMedia();
   }
 
   async refreshCommentModal() {
@@ -2099,10 +2115,19 @@ class AppClient {
             </div>
             <div class="comment-input-row">
               <img id="cmtMyAvatar" src="/img/default-avatar.svg" alt="My avatar">
-              <input type="text" id="modalCommentInput" placeholder="Viết bình luận công khai..." onkeypress="if(event.key === 'Enter') app.submitCommentFromModal()">
-              <button type="button" title="GIF" onclick="app._commentGifPostId=app.activeModalPostId; app.openGifPicker('comment')" style="border:none;background:transparent;cursor:pointer;font-size:0.85rem;font-weight:700;color:#0084ff;">GIF</button>
-              <button onclick="app.submitCommentFromModal()">➤</button>
+              <div class="comment-compose-field">
+                <input type="text" id="modalCommentInput" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') app.submitCommentFromModal()">
+                <div class="comment-compose-tools">
+                  <button type="button" title="Biểu tượng cảm xúc" aria-label="Biểu tượng cảm xúc" onclick="app.openCommentEmojiPicker('modalCommentInput')">🙂</button>
+                  <label title="Chọn ảnh hoặc video" aria-label="Chọn ảnh hoặc video">📷
+                    <input type="file" id="commentMediaInput" accept="image/*,video/*" onchange="app.handleCommentMedia(this, 'commentMediaPreview')">
+                  </label>
+                  <button type="button" title="Chọn GIF từ GIPHY" aria-label="Chọn GIF" onclick="app._commentGifPostId=app.activeModalPostId; app.openGifPicker('comment')">GIF</button>
+                </div>
+              </div>
+              <button type="button" aria-label="Gửi bình luận" onclick="app.submitCommentFromModal()">➤</button>
             </div>
+            <div class="comment-attachment-preview" id="commentMediaPreview" style="display:none;"></div>
           </div>
         </div>
       </div>
@@ -2150,12 +2175,14 @@ class AppClient {
 
   formatCommentContentHtml(raw) {
     const text = String(raw || '');
-    // Hỗ trợ __GIF__:url hoặc URL gif trực tiếp
-    const gifMatch = text.match(/__GIF__:(https?:\/\/\S+)/);
-    if (gifMatch) {
-      const url = this.escapeHtml(gifMatch[1]);
-      const rest = this.escapeHtml(text.replace(gifMatch[0], '').trim());
-      return `${rest ? `<div>${rest}</div>` : ''}<img class="comment-gif" src="${url}" alt="GIF" loading="lazy" style="max-width:220px;border-radius:10px;margin-top:4px;display:block;">`;
+    const mediaMatch = text.match(/__(GIF|MEDIA_IMAGE|MEDIA_VIDEO)__:(https?:\/\/\S+|data:[^\s]+)/);
+    if (mediaMatch) {
+      const url = this.escapeHtml(mediaMatch[2]);
+      const rest = this.escapeHtml(text.replace(mediaMatch[0], '').trim());
+      const media = mediaMatch[1] === 'MEDIA_VIDEO'
+        ? `<video class="comment-video" src="${url}" controls playsinline preload="metadata"></video>`
+        : `<img class="${mediaMatch[1] === 'GIF' ? 'comment-gif' : 'comment-image'}" src="${url}" alt="${mediaMatch[1] === 'GIF' ? 'GIF' : 'Ảnh đính kèm'}" loading="lazy">`;
+      return `${rest ? `<div>${rest}</div>` : ''}${media}`;
     }
     if (/^https?:\/\/\S+\.(gif)(\?\S*)?$/i.test(text.trim()) || /giphy\.com|tenor\.com/i.test(text)) {
       return `<img class="comment-gif" src="${this.escapeHtml(text.trim())}" alt="GIF" loading="lazy" style="max-width:220px;border-radius:10px;display:block;">`;
@@ -2328,11 +2355,79 @@ class AppClient {
     if (input) input.placeholder = 'Viết bình luận công khai...';
   }
 
+  handleCommentMedia(input, previewId) {
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+      input.value = '';
+      this.showToast('Chỉ hỗ trợ tệp ảnh hoặc video.', 'error');
+      return;
+    }
+
+    const maxSize = (isVideo ? 20 : 6) * 1024 * 1024;
+    if (file.size > maxSize) {
+      input.value = '';
+      this.showToast(`Tệp quá lớn (tối đa ${isVideo ? 20 : 6} MB).`, 'error');
+      return;
+    }
+
+    const preview = document.getElementById(previewId);
+    if (!preview) return;
+    this.pendingCommentMedia = null;
+    preview.style.display = 'none';
+    preview.innerHTML = '';
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        this.showToast('Không thể đọc tệp đã chọn.', 'error');
+        return;
+      }
+      const type = isVideo ? 'VIDEO' : 'IMAGE';
+      this.pendingCommentMedia = { type, url: reader.result };
+      const mediaElement = document.createElement(isVideo ? 'video' : 'img');
+      mediaElement.src = reader.result;
+      if (isVideo) {
+        mediaElement.controls = true;
+        mediaElement.playsInline = true;
+      } else {
+        mediaElement.alt = 'Ảnh đính kèm';
+      }
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'comment-media-remove';
+      removeButton.setAttribute('aria-label', 'Gỡ tệp đính kèm');
+      removeButton.textContent = '×';
+      removeButton.addEventListener('click', () => this.clearCommentMedia(previewId, input.id));
+      preview.replaceChildren(mediaElement, removeButton);
+      preview.style.display = 'block';
+    };
+    reader.onerror = () => {
+      input.value = '';
+      this.showToast('Không thể đọc tệp đã chọn.', 'error');
+    };
+    reader.readAsDataURL(file);
+  }
+
+  clearCommentMedia(previewId = 'commentMediaPreview', inputId = 'commentMediaInput') {
+    this.pendingCommentMedia = null;
+    const preview = document.getElementById(previewId);
+    if (preview) {
+      preview.style.display = 'none';
+      preview.innerHTML = '';
+    }
+    const input = document.getElementById(inputId);
+    if (input) input.value = '';
+  }
+
   async submitCommentFromModal() {
     const input = document.getElementById('modalCommentInput');
     if (!input || !this.activeModalPostId) return;
     const text = input.value.trim();
-    if (!text) return;
+    const media = this.pendingCommentMedia || { type: 'NONE', url: '' };
+    if (!text && !media.url) return;
 
     try {
       const res = await fetch('/api/posts/comment', {
@@ -2342,6 +2437,8 @@ class AppClient {
           post_id: this.activeModalPostId,
           author_id: this.currentUser.id,
           content: text,
+          media_type: media.type,
+          media_url: media.url,
           reply_to_id: this.replyingToCommentId || '',
           reply_to_author: this.replyingToAuthorName || ''
         })
@@ -2349,6 +2446,7 @@ class AppClient {
       const data = await res.json();
       if (data.status === 'ok') {
         input.value = '';
+        this.clearCommentMedia();
         this.cancelReplyComment();
         this.refreshCommentModal();
         await this.refreshSinglePostCard(this.activeModalPostId);
@@ -6629,6 +6727,18 @@ class AppClient {
       return;
     }
 
+    if (picker.dataset.mode === 'comment') {
+      const input = document.getElementById(picker.dataset.targetId);
+      if (input) {
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? start;
+        input.setRangeText(emoji, start, end, 'end');
+        input.focus();
+      }
+      this.closeChatEmojiModal();
+      return;
+    }
+
     const input = document.getElementById('chatInput');
     if (input) {
       const start = input.selectionStart ?? input.value.length;
@@ -6646,6 +6756,15 @@ class AppClient {
       return;
     }
     this.openChatEmojiModal('composer');
+  }
+
+  openCommentEmojiPicker(inputId, event) {
+    if (event) event.stopPropagation();
+    if (document.getElementById('chatEmojiModalOverlay')) {
+      this.closeChatEmojiModal();
+      return;
+    }
+    this.openChatEmojiModal('comment', inputId);
   }
 
   openChatEmojiModal(mode = 'composer', targetId = '') {
@@ -6910,6 +7029,7 @@ class AppClient {
           return;
         }
         input.value = '';
+        this.updateQuickReactionButton();
         this.cancelChatReply();
         if (!options.preservePendingMedia) this.clearPendingChatMedia();
         await this.loadGroupMessages(this.currentChatPartner.id);
@@ -6942,6 +7062,7 @@ class AppClient {
           return;
         }
         input.value = '';
+        this.updateQuickReactionButton();
         this.cancelChatReply();
         this.stopTyping();
         if (!options.preservePendingMedia) this.clearPendingChatMedia();
@@ -8888,6 +9009,7 @@ class AppClient {
   }
 
   onChatInputChange() {
+    this.updateQuickReactionButton();
     if (!this.currentChatPartner || !this.currentUser) return;
     if (this.currentChatPartner.isGroup) return; // Chỉ 1-1
     if (!this.isTyping) {
@@ -9424,7 +9546,10 @@ class AppClient {
 
   // --- GIPHY GIF picker ---
   openGifPicker(target = 'comment') {
-    // target: 'comment' | 'chat' | 'post'
+    if (target === 'post') {
+      this.showToast('GIF chỉ được gửi trong bình luận hoặc tin nhắn.', 'info');
+      return;
+    }
     this._gifPickerTarget = target;
     let overlay = document.getElementById('gifPickerOverlay');
     if (!overlay) {
@@ -9438,6 +9563,7 @@ class AppClient {
           </div>
           <input id="gifSearchInput" type="search" placeholder="Tìm kiếm GIF..." oninput="app.searchGifs(this.value)">
           <div id="gifResults" class="gif-results"><div class="gif-loading">Đang tải GIF phổ biến...</div></div>
+          <div class="gif-picker-attribution">Powered by <strong>GIPHY</strong></div>
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) this.closeGifPicker(); });
       document.body.appendChild(overlay);
@@ -9456,13 +9582,13 @@ class AppClient {
     if (!box) return;
     box.innerHTML = '<div class="gif-loading">Đang tải...</div>';
     const q = (query || '').trim();
-    // Dùng Giphy public demo key + trending/search
-    const key = 'dc6zaTOxFJmzC';
+    const key = window.GIPHY_API_KEY || 'dc6zaTOxFJmzC';
     const url = q
       ? `https://api.giphy.com/v1/gifs/search?api_key=${key}&q=${encodeURIComponent(q)}&limit=24&rating=pg-13`
       : `https://api.giphy.com/v1/gifs/trending?api_key=${key}&limit=24&rating=pg-13`;
     try {
       const res = await fetch(url);
+      if (!res.ok) throw new Error(`GIPHY trả về lỗi HTTP ${res.status}.`);
       const data = await res.json();
       const items = (data.data || []).map(g => {
         const still = g.images?.fixed_width_small?.url || g.images?.preview_gif?.url || '';
@@ -9470,13 +9596,13 @@ class AppClient {
         return { still, full, title: g.title || 'GIF' };
       }).filter(g => g.full);
       if (!items.length) {
-        // Fallback mẫu nếu API khóa / lỗi mạng
-        box.innerHTML = this._fallbackGifs().map(g => this._gifItemHtml(g)).join('');
+        box.innerHTML = '<div class="gif-empty">Không tìm thấy GIF phù hợp.</div>';
         return;
       }
       box.innerHTML = items.map(g => this._gifItemHtml(g)).join('');
-    } catch (e) {
-      box.innerHTML = this._fallbackGifs().map(g => this._gifItemHtml(g)).join('');
+    } catch (error) {
+      console.error('Không thể tải GIF từ GIPHY:', error);
+      box.innerHTML = '<div class="gif-error">Không thể tải GIF từ GIPHY. Kiểm tra kết nối hoặc API key rồi thử lại.</div>';
     }
   }
 
@@ -9487,24 +9613,17 @@ class AppClient {
     return `<button type="button" class="gif-item" title="${title}" onclick="app.selectGif(${app.jsArg(full)})"><img src="${still}" alt="${title}" loading="lazy"></button>`;
   }
 
-  _fallbackGifs() {
-    return [
-      { title: 'Happy', full: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif', still: 'https://media.giphy.com/media/111ebonMs90YLu/200w.gif' },
-      { title: 'Clap', full: 'https://media.giphy.com/media/7rj2ZgttXq3oY/giphy.gif', still: 'https://media.giphy.com/media/7rj2ZgttXq3oY/200w.gif' },
-      { title: 'Thumbs up', full: 'https://media.giphy.com/media/3o7abKhOpu0NwenH3O/giphy.gif', still: 'https://media.giphy.com/media/3o7abKhOpu0NwenH3O/200w.gif' },
-      { title: 'LOL', full: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif', still: 'https://media.giphy.com/media/10JhviFuU2gWD6/200w.gif' },
-      { title: 'Love', full: 'https://media.giphy.com/media/l0MYt5jPRYRf2oC68/giphy.gif', still: 'https://media.giphy.com/media/l0MYt5jPRYRf2oC68/200w.gif' },
-      { title: 'Yes', full: 'https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/giphy.gif', still: 'https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/200w.gif' }
-    ];
-  }
-
   async selectGif(gifUrl) {
     this.closeGifPicker();
     const target = this._gifPickerTarget || 'comment';
     if (target === 'chat') {
       await this.sendChatGif(gifUrl);
-    } else if (target === 'post') {
-      this.attachGifToPostComposer(gifUrl);
+    } else if (target === 'group-comment') {
+      if (typeof groupsPage === 'undefined' || !groupsPage.activeCommentPostId) {
+        this.showToast('Hãy mở bình luận của một bài viết nhóm trước.', 'info');
+        return;
+      }
+      await groupsPage.sendGroupCommentGif(gifUrl);
     } else {
       await this.sendCommentGif(gifUrl);
     }
@@ -9552,22 +9671,6 @@ class AppClient {
     }
   }
 
-  attachGifToPostComposer(gifUrl) {
-    this.currentMedia = { type: 'IMAGE', url: gifUrl };
-    this.pendingPostMedia = { type: 'IMAGE', url: gifUrl };
-    const gallery = document.getElementById('postImagePreview');
-    if (gallery) {
-      gallery.style.display = 'block';
-      gallery.innerHTML = `<img src="${this.escapeHtml(gifUrl)}" alt="GIF" style="max-width:100%;border-radius:10px;">`;
-    }
-    const video = document.getElementById('postVideoPreview');
-    if (video) {
-      video.style.display = 'none';
-      video.removeAttribute('src');
-    }
-    this.showToast('Đã chọn GIF cho bài viết. Nhấn Đăng để gửi.', 'success');
-  }
-
   async sendCommentGif(gifUrl) {
     // Bình luận GIF trên bài đang mở modal
     const postId = this.activeModalPostId || this._commentGifPostId;
@@ -9581,13 +9684,19 @@ class AppClient {
         body: JSON.stringify({
           post_id: postId,
           author_id: this.currentUser.id,
-          content: '',
-          media_type: 'IMAGE',
-          media_url: gifUrl
+          content: document.getElementById('modalCommentInput')?.value.trim() || '',
+          media_type: 'GIF',
+          media_url: gifUrl,
+          reply_to_id: this.replyingToCommentId || '',
+          reply_to_author: this.replyingToAuthorName || ''
         })
       });
       const data = await this.readApiResponse(res);
       if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Không gửi được GIF bình luận');
+      const input = document.getElementById('modalCommentInput');
+      if (input) input.value = '';
+      this.cancelReplyComment();
+      this.clearCommentMedia();
       this.showToast('Đã gửi GIF!', 'success');
       if (typeof this.reloadCommentModal === 'function') this.reloadCommentModal(postId);
       else if (typeof this.openCommentModal === 'function') this.openCommentModal(postId);
@@ -9633,6 +9742,18 @@ function installMobilePrimaryNavigation() {
         <div class="notif-list" id="notifList"><div style="padding:1rem;text-align:center;color:var(--text-muted);font-size:.85rem;">Không có thông báo mới</div></div>
       </div>`;
     navRight.insertBefore(notificationWrapper, profileBadge || logoutButton || null);
+  }
+
+  const notificationButton = notificationWrapper.querySelector('#notificationBtn');
+  if (notificationButton) {
+    const unreadBadge = notificationButton.querySelector('.badge-counter')?.outerHTML || '';
+    notificationButton.classList.add('nav-monochrome-icon');
+    notificationButton.innerHTML = `<svg class="nav-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>${unreadBadge}`;
+  }
+  if (logoutButton) {
+    logoutButton.classList.add('nav-monochrome-icon');
+    logoutButton.style.removeProperty('color');
+    logoutButton.innerHTML = '<svg class="nav-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 17l5-5-5-5"></path><path d="M15 12H3"></path><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7"></path></svg>';
   }
 
   const links = [
