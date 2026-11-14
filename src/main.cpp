@@ -398,7 +398,7 @@ static bool validateMediaValue(const std::string& kindIn, const std::string& val
     if (value.empty()) return true;
     std::string kind = kindIn;
     if (isAvatar) kind = "IMAGE";
-    if (kind != "IMAGE" && kind != "VIDEO" && kind != "AUDIO" && kind != "FILE") { err = "Loại tệp đính kèm không hợp lệ."; return false; }
+    if (kind != "IMAGE" && kind != "VIDEO" && kind != "GIF" && kind != "AUDIO" && kind != "FILE") { err = "Loại tệp đính kèm không hợp lệ."; return false; }
     std::vector<std::string> items;
     if (kind == "IMAGE" && !isAvatar && value.front() == '[') {
         const json arr = json::parse(value, nullptr, false);
@@ -411,7 +411,10 @@ static bool validateMediaValue(const std::string& kindIn, const std::string& val
         items.push_back(value);
     }
     for (const auto& it : items) {
-        if (!sec::isSafeMediaUrl(it, kind)) { err = "Tệp đính kèm không hợp lệ hoặc không được phép."; return false; }
+        if (!sec::isSafeMediaUrl(it, kind) || (kind == "GIF" && it.rfind("https://", 0) != 0)) {
+            err = "Tệp đính kèm không hợp lệ hoặc không được phép.";
+            return false;
+        }
         const size_t sz = getBase64DataUrlSize(it);
         const size_t lim = isAvatar ? 3ULL * 1024 * 1024 : (kind == "VIDEO" ? gMaxVideoBytes : gMaxImageBytes);
         if (sz > lim) { err = "Tệp quá lớn (tối đa " + std::to_string(lim / (1024 * 1024)) + " MB)."; return false; }
@@ -602,6 +605,7 @@ int main() {
 
     Database db;
     const std::string databasePath = sec::envOr("DATABASE_PATH", "data/social_network.db");
+    std::cerr << "[Database] SQLite path: " << databasePath << std::endl;
     if (!db.init(databasePath)) {
         std::cerr << "Lỗi: Không thể khởi tạo SQLite Database!" << std::endl;
         return 1;
@@ -692,6 +696,48 @@ int main() {
             return;
         }
         res.set_content(json({{"status", "ok"}, {"api_key", gGiphyApiKey}}).dump(), "application/json; charset=utf-8");
+    });
+
+    R.Get("/api/giphy/saved", [&db](const httplib::Request& req, httplib::Response& res) {
+        const std::string userId = req.get_param_value("user_id");
+        if (userId.empty()) {
+            sendJsonError(res, 400, "Thiếu user_id.");
+            return;
+        }
+        json gifs;
+        if (!db.getSavedGifs(userId, gifs)) {
+            sendJsonError(res, 500, "Không thể tải GIF đã lưu.");
+            return;
+        }
+        res.set_content(json({{"status", "ok"}, {"gifs", gifs}}).dump(), "application/json; charset=utf-8");
+    });
+
+    R.Post("/api/giphy/saved", [&db](const httplib::Request& req, httplib::Response& res) {
+        try {
+            const auto body = json::parse(req.body);
+            const std::string userId = getJsonStringSafe(body, "user_id");
+            const std::string action = getJsonStringSafe(body, "action");
+            const std::string gifUrl = getJsonStringSafe(body, "gif_url");
+            const std::string title = sec::sanitizeLine(getJsonStringSafe(body, "title"), 120);
+            if (userId.empty() || gifUrl.empty() || (action != "SAVE" && action != "REMOVE")) {
+                sendJsonError(res, 400, "Dữ liệu GIF không hợp lệ.");
+                return;
+            }
+            if (gifUrl.rfind("https://", 0) != 0 || !sec::isSafeMediaUrl(gifUrl, "GIF")) {
+                sendJsonError(res, 400, "URL GIF không được phép.");
+                return;
+            }
+            const bool ok = action == "SAVE"
+                ? db.saveGif(userId, gifUrl, title.empty() ? "GIF" : title)
+                : db.removeSavedGif(userId, gifUrl);
+            if (!ok) {
+                sendJsonError(res, 500, "Không thể cập nhật GIF đã lưu.");
+                return;
+            }
+            res.set_content(json({{"status", "ok"}, {"action", action}}).dump(), "application/json; charset=utf-8");
+        } catch (const std::exception&) {
+            sendJsonError(res, 400, "Dữ liệu yêu cầu không hợp lệ.");
+        }
     });
 
     // Chỉ đăng nhập bằng Google hoặc bằng thông tin tài khoản ConnectSphere.
@@ -1347,7 +1393,10 @@ int main() {
             std::string sharedContent = body.value("shared_content", "");
 
             if (title.length() > 100) title = title.substr(0, 100);
-            if (content.length() > 1000) content = content.substr(0, 1000);
+            if (sec::utf8Length(content) > 1500) {
+                sendJsonError(res, 400, "Nội dung bài viết không được vượt quá 1.500 ký tự.");
+                return;
+            }
 
             std::string mediaError;
             if (!validatePostMedia(mediaType, mediaUrl, mediaError)) {
@@ -1444,6 +1493,10 @@ int main() {
             if (postId.empty() || authorId.empty() || content.empty()) {
                 res.status = 400;
                 res.set_content(json({{"status", "error"}, {"message", "Nội dung bài viết không được để trống!"}}).dump(), "application/json; charset=utf-8");
+                return;
+            }
+            if (sec::utf8Length(content) > 1500) {
+                sendJsonError(res, 400, "Nội dung bài viết không được vượt quá 1.500 ký tự.");
                 return;
             }
 
@@ -3032,6 +3085,10 @@ int main() {
             std::string content = trimStr(body.value("content", ""));
             std::string mediaType = body.value("media_type", "NONE");
             std::string mediaUrl = body.value("media_url", "");
+            if (sec::utf8Length(content) > 1500) {
+                sendJsonError(res, 400, "Nội dung bài viết không được vượt quá 1.500 ký tự.");
+                return;
+            }
             if (title.empty() && content.empty() && mediaType == "NONE") {
                 sendJsonError(res, 400, "Nhập tiêu đề, nội dung hoặc thêm ảnh/video.");
                 return;
@@ -3096,6 +3153,10 @@ int main() {
             const std::string userId = body.value("user_id", "");
             const std::string title = trimStr(body.value("title", ""));
             const std::string content = trimStr(body.value("content", ""));
+            if (sec::utf8Length(content) > 1500) {
+                sendJsonError(res, 400, "Nội dung bài viết không được vượt quá 1.500 ký tự.");
+                return;
+            }
             if (postId.empty() || userId.empty() || (title.empty() && content.empty())) {
                 sendJsonError(res, 400, "Nhập tiêu đề hoặc nội dung bài viết.");
                 return;

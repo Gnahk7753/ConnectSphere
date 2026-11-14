@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ConnectSphere</title>
   <script>if (localStorage.getItem('cs_theme') === 'dark') document.documentElement.dataset.theme = 'dark';</script>
-  <link rel="stylesheet" href="css/style.css?v=20261115-nav-help">
+  <link rel="stylesheet" href="css/style.css?v=20261115-gif-saved">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
   <!-- Google Identity Services (Google Sign-In) -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -176,7 +176,7 @@
           <img id="postCreateAvatar" src="/img/default-avatar.svg" alt="Avatar">
           <div class="create-post-input-container">
             <input type="text" id="postTitleInput" class="create-post-title-input" placeholder="Tiêu đề..." maxlength="100">
-            <textarea id="postContentInput" class="create-post-textarea" placeholder="Bạn đang nghĩ gì thế? Chia sẻ câu chuyện hoặc khoảnh khắc hôm nay..." maxlength="1000"></textarea>
+            <textarea id="postContentInput" class="create-post-textarea" placeholder="Bạn đang nghĩ gì thế? Chia sẻ câu chuyện hoặc khoảnh khắc hôm nay..." maxlength="1500"></textarea>
           </div>
         </div>
 
@@ -350,7 +350,7 @@
         <button type="button" class="chat-composer-emoji-trigger" title="GIF" onclick="app.openGifPicker('chat')">GIF</button>
         <div class="chat-composer-emoji-picker" id="chatEmojiPickerComposer"></div>
       </div>
-      <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
+      <input type="text" id="chatInput" autocomplete="off" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
       <button type="button" class="chat-composer-like" title="Gửi nhanh 👍">👍</button>
     </div>
   </div>
@@ -744,7 +744,7 @@
         <div class="comment-input-row">
           <img id="cmtMyAvatar" src="/img/default-avatar.svg" alt="My avatar">
           <div class="comment-compose-field">
-            <input type="text" id="modalCommentInput" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') app.submitCommentFromModal()">
+            <input type="text" id="modalCommentInput" autocomplete="off" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') app.submitCommentFromModal()">
             <div class="comment-compose-tools">
               <button type="button" title="Biểu tượng cảm xúc" aria-label="Biểu tượng cảm xúc" onclick="app.openCommentEmojiPicker('modalCommentInput')">🙂</button>
               <label title="Chọn ảnh hoặc video" aria-label="Chọn ảnh hoặc video">📷
@@ -774,7 +774,7 @@
       </div>
       <div class="form-group" style="margin-bottom: 0.75rem;">
         <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Nội dung bài viết:</label>
-        <textarea id="editPostContentInput" rows="4" placeholder="Bạn đang nghĩ gì?..." style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem; resize: vertical;"></textarea>
+        <textarea id="editPostContentInput" rows="4" maxlength="1500" placeholder="Bạn đang nghĩ gì?..." style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem; resize: vertical;"></textarea>
       </div>
       <div class="form-group" style="margin-bottom: 0.75rem;">
         <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Quyền riêng tư:</label>
@@ -824,7 +824,7 @@
       </div>
       <div class="form-group">
         <label>Lời nhắn kèm theo (tùy chọn):</label>
-        <textarea id="shareChatMessageInput" placeholder="Bạn thấy bài viết này thế nào?..."></textarea>
+        <textarea id="shareChatMessageInput" autocomplete="off" placeholder="Bạn thấy bài viết này thế nào?..."></textarea>
       </div>
       <div style="display: flex; gap: 0.5rem;">
         <button class="btn-secondary" style="flex: 1;" onclick="app.closeShareToChatModal()">Hủy</button>
@@ -964,6 +964,6 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261115-profile-id-fix"></script>
+  <script src="js/app.js?v=20261115-gif-saved"></script>
 </body>
 </html>

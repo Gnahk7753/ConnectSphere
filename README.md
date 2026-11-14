@@ -6,11 +6,11 @@ ConnectSphere là ứng dụng mạng xã hội mini, cung cấp các chức nă
 
 - **Tài khoản và hồ sơ:** đăng nhập bằng Google hoặc bằng email/tên đăng nhập và mật khẩu; tài khoản mới được tạo qua Google.
 - **Quyền riêng tư:** người dùng cần đồng ý Điều khoản sử dụng và Chính sách quyền riêng tư trước khi đăng nhập.
-- **Bảng tin:** đăng bài, chia sẻ hình ảnh/video, bày tỏ cảm xúc và bình luận, bao gồm phản hồi bình luận.
+- **Bảng tin:** bài viết tối đa 1.500 ký tự, nội dung dài có thể mở rộng; chia sẻ hình ảnh/video và bình luận bằng văn bản, ảnh, video hoặc GIF.
 - **Kết nối bạn bè:** gửi và xử lý lời mời kết bạn, tìm kiếm người dùng và xem gợi ý kết bạn.
 - **Nhóm cộng đồng:** tạo nhóm, tham gia nhóm và đăng bài trong nhóm.
 - **Nhắn tin:** trò chuyện trực tiếp và nhắn tin nhóm.
-- **GIF bình luận:** tìm và gửi GIF qua GIPHY.
+- **GIF:** tìm và gửi GIF qua GIPHY, lưu GIF yêu thích theo tài khoản và xóa khỏi danh sách đã lưu.
 - **Tìm kiếm và thông báo:** tìm người dùng, nhóm, bài viết; nhận thông báo về các hoạt động liên quan.
 - **Quản trị:** bảng điều khiển quản trị hỗ trợ theo dõi hoạt động và xử lý báo cáo.
 - **Tích hợp:** Google Sign-In dùng để tạo tài khoản và đăng nhập; Gemini hỗ trợ kiểm duyệt nội dung khi được cấu hình.
@@ -56,7 +56,7 @@ Dự án có thể build trên Linux bằng CMake và deploy trên Render qua Do
    - `TRUST_PROXY=1`
    - Thêm `GOOGLE_CLIENT_ID` để bật đăng nhập/tạo tài khoản bằng Google. Có thể thêm `GEMINI_API_KEY` để bật kiểm duyệt nội dung bằng Gemini.
    - Thêm `GIPHY_API_KEY` để bật tìm kiếm GIF trong bình luận.
-4. Để dữ liệu không mất sau khi service khởi động lại hoặc deploy, gắn **Persistent Disk** cho service. Ví dụ, đặt mount path là `/var/data`, sau đó đặt `DATABASE_PATH=/var/data/social_network.db` trong Environment. Đường dẫn `DATABASE_PATH` phải nằm bên trong mount path của disk. Nếu disk của bạn đang mount tại `/app/data`, đặt `DATABASE_PATH=/app/data/social_network.db`.
+4. Để dữ liệu không mất sau khi service khởi động lại hoặc deploy, gắn **Persistent Disk** cho service. Ví dụ, đặt mount path là `/var/data`, sau đó đặt `DATABASE_PATH=/var/data/social_network.db` trong Environment. Đường dẫn `DATABASE_PATH` phải nằm bên trong mount path của disk. Nếu disk của bạn đang mount tại `/app/data`, đặt `DATABASE_PATH=/app/data/social_network.db`. Máy chủ tự tạo thư mục cha nếu thiếu, nhưng thư mục phải nằm trên disk đã mount và có quyền ghi.
 5. Deploy. Ứng dụng tự đọc `PORT` do Render cấp; không cần đặt cổng cố định.
 
 Không bật `SEED_DEMO_DATA` trên production. Cơ sở dữ liệu local bị loại khỏi Docker image; nếu chưa gắn Persistent Disk, SQLite nằm trên filesystem tạm và sẽ mất sau khi Render redeploy hoặc khởi động lại service. Chỉ đặt `DATABASE_PATH` thôi không tạo vùng lưu trữ bền vững.

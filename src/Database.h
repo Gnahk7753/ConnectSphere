@@ -13,6 +13,8 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <filesystem>
+#include <system_error>
 #include <cmath>
 #include <cctype>
 #include <sqlite3.h>
@@ -341,11 +343,90 @@ public:
         }
     }
 
+    bool getSavedGifs(const std::string& userId, json& gifs) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT gif_url, title, saved_at FROM saved_gifs WHERE user_id = ? ORDER BY saved_at DESC;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "Failed to prepare saved GIF query: " << sqlite3_errmsg(db) << std::endl;
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_TRANSIENT);
+        gifs = json::array();
+        int rc = SQLITE_ROW;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const auto* url = sqlite3_column_text(stmt, 0);
+            const auto* title = sqlite3_column_text(stmt, 1);
+            const auto* savedAt = sqlite3_column_text(stmt, 2);
+            gifs.push_back({
+                {"gif_url", url ? reinterpret_cast<const char*>(url) : ""},
+                {"title", title ? reinterpret_cast<const char*>(title) : "GIF"},
+                {"saved_at", savedAt ? reinterpret_cast<const char*>(savedAt) : ""}
+            });
+        }
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) {
+            std::cerr << "Failed to load saved GIFs: " << sqlite3_errmsg(db) << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    bool saveGif(const std::string& userId, const std::string& gifUrl, const std::string& title) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "INSERT INTO saved_gifs (user_id, gif_url, title, saved_at) VALUES (?, ?, ?, ?) "
+                          "ON CONFLICT(user_id, gif_url) DO UPDATE SET title = excluded.title;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "Failed to prepare saved GIF insert: " << sqlite3_errmsg(db) << std::endl;
+            return false;
+        }
+        const std::string savedAt = getCurrentTimeStr();
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, gifUrl.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 4, savedAt.c_str(), -1, SQLITE_TRANSIENT);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        if (!ok) std::cerr << "Failed to save GIF: " << sqlite3_errmsg(db) << std::endl;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool removeSavedGif(const std::string& userId, const std::string& gifUrl) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "DELETE FROM saved_gifs WHERE user_id = ? AND gif_url = ?;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "Failed to prepare saved GIF removal: " << sqlite3_errmsg(db) << std::endl;
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, userId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, gifUrl.c_str(), -1, SQLITE_TRANSIENT);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        if (!ok) std::cerr << "Failed to remove saved GIF: " << sqlite3_errmsg(db) << std::endl;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
     bool init(const std::string& dbPath = "data/social_network.db") {
         std::lock_guard<std::mutex> lock(dbMutex);
-        int rc = sqlite3_open(dbPath.c_str(), &db);
+        const std::filesystem::path databaseFile(dbPath);
+        const std::filesystem::path databaseDirectory = databaseFile.parent_path();
+        if (!databaseDirectory.empty()) {
+            std::error_code directoryError;
+            std::filesystem::create_directories(databaseDirectory, directoryError);
+            if (directoryError) {
+                std::cerr << "Không thể tạo thư mục SQLite '" << databaseDirectory.string()
+                          << "': " << directoryError.message() << std::endl;
+                return false;
+            }
+        }
+        int rc = sqlite3_open_v2(dbPath.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
         if (rc != SQLITE_OK) {
-            std::cerr << "Không thể mở SQLite DB: " << sqlite3_errmsg(db) << std::endl;
+            const char* errorMessage = db ? sqlite3_errmsg(db) : sqlite3_errstr(rc);
+            std::cerr << "Không thể mở SQLite DB '" << dbPath << "': " << errorMessage << std::endl;
+            if (db) sqlite3_close(db);
+            db = nullptr;
             return false;
         }
 
@@ -550,6 +631,15 @@ private:
                 moderation_flagged INTEGER DEFAULT 0,
                 last_active_at TEXT DEFAULT '',
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS saved_gifs (
+                user_id TEXT NOT NULL,
+                gif_url TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT 'GIF',
+                saved_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, gif_url),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS message_reactions (

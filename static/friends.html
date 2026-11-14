@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bạn bè - ConnectSphere</title>
   <script>if (localStorage.getItem('cs_theme') === 'dark') document.documentElement.dataset.theme = 'dark';</script>
-  <link rel="stylesheet" href="css/style.css?v=20261115-nav-help">
+  <link rel="stylesheet" href="css/style.css?v=20261115-gif-saved">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
 </head>
 <body>
@@ -229,7 +229,7 @@
       </div>
     </div>
     <div class="chat-footer">
-      <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
+      <input type="text" id="chatInput" autocomplete="off" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
       <button onclick="app.sendChatMessage()">➤</button>
     </div>
   </div>
@@ -313,7 +313,7 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261115-profile-id-fix"></script>
+  <script src="js/app.js?v=20261115-gif-saved"></script>
   <script>
     window.addEventListener("DOMContentLoaded", () => {
       const urlParams = new URLSearchParams(window.location.search);

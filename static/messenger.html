@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Đoạn chat - ConnectSphere</title>
   <script>if (localStorage.getItem('cs_theme') === 'dark') document.documentElement.dataset.theme = 'dark';</script>
-  <link rel="stylesheet" href="css/style.css?v=20261115-nav-help">
+  <link rel="stylesheet" href="css/style.css?v=20261115-gif-saved">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
 </head>
 <body class="messenger-page">
@@ -146,7 +146,7 @@
             <button type="button" class="chat-composer-emoji-trigger" title="GIF" onclick="app.openGifPicker('chat')">GIF</button>
             <div class="chat-composer-emoji-picker" id="chatEmojiPickerComposer"></div>
           </div>
-          <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
+          <input type="text" id="chatInput" autocomplete="off" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
           <button type="button" class="chat-composer-like" title="Gửi nhanh 👍">👍</button>
         </div>
       </div>
@@ -222,6 +222,6 @@
     </div>
   </div>
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261115-profile-id-fix"></script>
+  <script src="js/app.js?v=20261115-gif-saved"></script>
 </body>
 </html>

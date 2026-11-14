@@ -52,6 +52,14 @@ class AppClient {
     this.currentChatPartner = null; // Có thể là User hoặc Group { id, name, avatar, isGroup }
     this.giphyApiKey = '';
     this.giphyApiKeyPromise = null;
+    this.savedGifs = [];
+    this.savedGifsLoaded = false;
+    this.savedGifsLoading = false;
+    this.savedGifsUserId = '';
+    this.savedGifsError = '';
+    this.savedGifsRequestId = 0;
+    this.gifSearchResults = [];
+    this.gifPickerView = 'discover';
     this.oldestMessageId = 0;
     this.hasMoreMessages = false;
     this.isLoadingOlderMessages = false;
@@ -1235,6 +1243,31 @@ class AppClient {
     }
   }
 
+  renderExpandablePostContent(content, key, extraClass = '') {
+    const text = String(content || '');
+    const classes = ['post-content', extraClass].filter(Boolean).join(' ');
+    const lineCount = text.split(/\r?\n/).length;
+    if (Array.from(text).length <= 400 && lineCount <= 5) {
+      return `<div class="${classes}">${this.escapeHtml(text)}</div>`;
+    }
+
+    const id = `post-content-${key}`;
+    return `
+      <div id="${this.escapeHtml(id)}" class="${classes} post-content-collapsed">${this.escapeHtml(text)}</div>
+      <button type="button" class="post-content-toggle" aria-expanded="false" onclick="app.togglePostContent(${app.jsArg(id)}, this)">Xem thêm</button>
+    `;
+  }
+
+  togglePostContent(id, button) {
+    const content = document.getElementById(id);
+    if (!content || !button) return;
+
+    const expanded = content.classList.contains('post-content-collapsed');
+    content.classList.toggle('post-content-collapsed', !expanded);
+    button.textContent = expanded ? 'Thu gọn' : 'Xem thêm';
+    button.setAttribute('aria-expanded', String(expanded));
+  }
+
   renderPostCard(p) {
     if (!this.postsMap) this.postsMap = {};
     this.postsMap[p.id] = p;
@@ -1313,7 +1346,7 @@ class AppClient {
 
     if (isRepost) {
       repostBadgeHtml = `<span class="repost-header-badge">🔁 Đã đăng lại</span>`;
-      let thoughtsHtml = p.content ? `<div class="post-content repost-thoughts">${this.escapeHtml(p.content)}</div>` : '';
+      let thoughtsHtml = p.content ? this.renderExpandablePostContent(p.content, `repost-thoughts-${p.id}`, 'repost-thoughts') : '';
       let origHtml = '';
 
       if (p.original_post) {
@@ -1335,7 +1368,7 @@ class AppClient {
               </button>
             </div>
             ${op.title ? `<div class="repost-orig-title">${this.escapeHtml(op.title)}</div>` : ''}
-            <div class="repost-orig-content">${this.escapeHtml(op.content || '')}</div>
+            ${this.renderExpandablePostContent(op.content || '', `repost-original-${p.id}`, 'repost-orig-content')}
             ${origMediaHtml}
             <div class="repost-orig-footer">
               <span onclick="app.openCommentModal(${app.jsArg(op.id)})" style="cursor: pointer;">💬 ${op.comments_count || 0} bình luận &bull; ❤️ ${op.total_reactions || 0} cảm xúc</span>
@@ -1353,7 +1386,7 @@ class AppClient {
     } else {
       bodyContentHtml = `
         ${titleHtml}
-        <div class="post-content">${this.escapeHtml(p.content)}</div>
+        ${this.renderExpandablePostContent(p.content, `main-${p.id}`)}
         ${mediaHtml}
       `;
     }
@@ -1526,7 +1559,7 @@ class AppClient {
         </div>
         <div class="form-group" style="margin-bottom: 0.75rem;">
           <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Nội dung bài viết:</label>
-          <textarea id="editPostContentInput" rows="4" placeholder="Bạn đang nghĩ gì?..." style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem; resize: vertical;"></textarea>
+          <textarea id="editPostContentInput" rows="4" maxlength="1500" placeholder="Bạn đang nghĩ gì?..." style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface-secondary); color: var(--text-primary); font-size: 0.9rem; resize: vertical;"></textarea>
         </div>
         <div class="form-group" style="margin-bottom: 0.75rem;">
           <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; display: block;">Quyền riêng tư:</label>
@@ -2126,7 +2159,7 @@ class AppClient {
             <div class="comment-input-row">
               <img id="cmtMyAvatar" src="/img/default-avatar.svg" alt="My avatar">
               <div class="comment-compose-field">
-                <input type="text" id="modalCommentInput" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') app.submitCommentFromModal()">
+                <input type="text" id="modalCommentInput" autocomplete="off" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') app.submitCommentFromModal()">
                 <div class="comment-compose-tools">
                   <button type="button" title="Biểu tượng cảm xúc" aria-label="Biểu tượng cảm xúc" onclick="app.openCommentEmojiPicker('modalCommentInput')">🙂</button>
                   <label title="Chọn ảnh hoặc video" aria-label="Chọn ảnh hoặc video">📷
@@ -9552,6 +9585,7 @@ class AppClient {
       return;
     }
     this._gifPickerTarget = target;
+    this.gifPickerView = 'discover';
     let overlay = document.getElementById('gifPickerOverlay');
     if (!overlay) {
       overlay = document.createElement('div');
@@ -9562,7 +9596,11 @@ class AppClient {
             <strong>GIF</strong>
             <button type="button" class="gif-picker-close" onclick="app.closeGifPicker()">✕</button>
           </div>
-          <input id="gifSearchInput" type="search" placeholder="Tìm kiếm GIF..." oninput="app.searchGifs(this.value)">
+          <div class="gif-picker-tabs" role="tablist">
+            <button type="button" id="gifDiscoverTab" class="active" role="tab" onclick="app.setGifPickerView('discover')">Khám phá</button>
+            <button type="button" id="gifSavedTab" role="tab" onclick="app.setGifPickerView('saved')">Đã lưu</button>
+          </div>
+          <input id="gifSearchInput" type="search" autocomplete="off" placeholder="Tìm kiếm GIF..." oninput="app.searchGifs(this.value)">
           <div id="gifResults" class="gif-results"><div class="gif-loading">Đang tải GIF phổ biến...</div></div>
           <div class="gif-picker-attribution">Powered by <strong>GIPHY</strong></div>
         </div>`;
@@ -9570,8 +9608,33 @@ class AppClient {
       document.body.appendChild(overlay);
     }
     overlay.classList.add('show');
+    const searchInput = document.getElementById('gifSearchInput');
+    if (searchInput) searchInput.value = '';
+    this.setGifPickerView('discover', false);
     this.searchGifs('');
+    this.loadSavedGifs();
     setTimeout(() => document.getElementById('gifSearchInput')?.focus(), 50);
+  }
+
+  setGifPickerView(view, refresh = true) {
+    this.gifPickerView = view === 'saved' ? 'saved' : 'discover';
+    const isSaved = this.gifPickerView === 'saved';
+    const searchInput = document.getElementById('gifSearchInput');
+    const discoverTab = document.getElementById('gifDiscoverTab');
+    const savedTab = document.getElementById('gifSavedTab');
+    if (searchInput) {
+      searchInput.disabled = isSaved;
+      searchInput.placeholder = isSaved ? 'GIF đã lưu' : 'Tìm kiếm GIF...';
+    }
+    discoverTab?.classList.toggle('active', !isSaved);
+    savedTab?.classList.toggle('active', isSaved);
+
+    if (isSaved) {
+      this.renderSavedGifs();
+      this.loadSavedGifs();
+    } else if (refresh) {
+      this.searchGifs(searchInput?.value || '');
+    }
   }
 
   closeGifPicker() {
@@ -9599,6 +9662,10 @@ class AppClient {
   async searchGifs(query) {
     const box = document.getElementById('gifResults');
     if (!box) return;
+    if (this.gifPickerView === 'saved') {
+      this.renderSavedGifs();
+      return;
+    }
     box.innerHTML = '<div class="gif-loading">Đang tải...</div>';
     const q = (query || '').trim();
     try {
@@ -9614,22 +9681,137 @@ class AppClient {
         const full = g.images?.original?.url || g.images?.downsized?.url || still;
         return { still, full, title: g.title || 'GIF' };
       }).filter(g => g.full);
+      if (this.gifPickerView === 'saved') return;
+      this.gifSearchResults = items;
       if (!items.length) {
         box.innerHTML = '<div class="gif-empty">Không tìm thấy GIF phù hợp.</div>';
         return;
       }
-      box.innerHTML = items.map(g => this._gifItemHtml(g)).join('');
+      this.renderGifItems(items);
     } catch (error) {
+      if (this.gifPickerView === 'saved') return;
       console.error('Không thể tải GIF từ GIPHY:', error);
       box.innerHTML = `<div class="gif-error">${this.escapeHtml(error.message || 'Không thể tải GIF từ GIPHY.')}</div>`;
     }
   }
 
+  renderGifItems(items) {
+    const box = document.getElementById('gifResults');
+    if (!box) return;
+    box.innerHTML = items.length
+      ? items.map(g => this._gifItemHtml(g)).join('')
+      : '<div class="gif-empty">Chưa lưu GIF nào.</div>';
+  }
+
+  async loadSavedGifs() {
+    const userId = this.currentUser?.id;
+    if (!userId) {
+      this.savedGifsError = 'Bạn cần đăng nhập để xem GIF đã lưu.';
+      this.savedGifsLoaded = false;
+      if (this.gifPickerView === 'saved') this.renderSavedGifs();
+      return;
+    }
+    if (this.savedGifsUserId !== userId) {
+      this.savedGifs = [];
+      this.savedGifsLoaded = false;
+      this.savedGifsError = '';
+      this.savedGifsUserId = userId;
+      this.savedGifsLoading = false;
+      this.savedGifsRequestId += 1;
+    }
+    if (this.savedGifsLoading) return;
+    if (this.savedGifsLoaded && this.savedGifsUserId === userId) return;
+
+    const requestId = ++this.savedGifsRequestId;
+    this.savedGifsLoading = true;
+    this.savedGifsError = '';
+    if (this.gifPickerView === 'saved') this.renderSavedGifs();
+    try {
+      const res = await fetch(`/api/giphy/saved?user_id=${encodeURIComponent(userId)}`);
+      const data = await this.readApiResponse(res);
+      if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Không thể tải GIF đã lưu.');
+      if (requestId !== this.savedGifsRequestId) return;
+      this.savedGifs = Array.isArray(data.gifs) ? data.gifs : [];
+      this.savedGifsLoaded = true;
+    } catch (error) {
+      if (requestId !== this.savedGifsRequestId) return;
+      console.error('Không thể tải GIF đã lưu:', error);
+      this.savedGifsError = error.message || 'Không thể tải GIF đã lưu.';
+    } finally {
+      if (requestId === this.savedGifsRequestId) {
+        this.savedGifsLoading = false;
+        if (this.gifPickerView === 'saved') this.renderSavedGifs();
+        else if (this.gifPickerView === 'discover' && document.querySelector('#gifResults .gif-item')) {
+          this.renderGifItems(this.gifSearchResults);
+        }
+      }
+    }
+  }
+
+  renderSavedGifs() {
+    const box = document.getElementById('gifResults');
+    if (!box) return;
+    if (this.savedGifsLoading) {
+      box.innerHTML = '<div class="gif-loading">Đang tải GIF đã lưu...</div>';
+    } else if (this.savedGifsError) {
+      box.innerHTML = `<div class="gif-error">${this.escapeHtml(this.savedGifsError)}</div>`;
+    } else {
+      this.renderGifItems(this.savedGifs);
+    }
+  }
+
   _gifItemHtml(g) {
-    const full = this.escapeHtml(g.full);
-    const still = this.escapeHtml(g.still || g.full);
+    const gifUrl = g.full || g.gif_url || '';
+    const stillUrl = g.still || gifUrl;
+    const full = this.escapeHtml(gifUrl);
+    const still = this.escapeHtml(stillUrl);
     const title = this.escapeHtml(g.title || 'GIF');
-    return `<button type="button" class="gif-item" title="${title}" onclick="app.selectGif(${app.jsArg(full)})"><img src="${still}" alt="${title}" loading="lazy"></button>`;
+    const saved = this.savedGifs.some(item => item.gif_url === gifUrl);
+    return `
+      <div class="gif-item">
+        <button type="button" class="gif-select" title="${title}" onclick="app.selectGif(${app.jsArg(gifUrl)})">
+          <img src="${still}" alt="${title}" loading="lazy">
+        </button>
+        <button type="button" class="gif-save${saved ? ' is-saved' : ''}" title="${saved ? 'Xóa khỏi GIF đã lưu' : 'Lưu GIF'}"
+          aria-label="${saved ? 'Xóa khỏi GIF đã lưu' : 'Lưu GIF'}"
+          onclick="app.toggleSavedGif(event, ${app.jsArg(gifUrl)}, ${app.jsArg(g.title || 'GIF')})">${saved ? '★' : '☆'}</button>
+      </div>`;
+  }
+
+  async toggleSavedGif(event, gifUrl, title) {
+    event?.stopPropagation();
+    if (!this.currentUser) {
+      this.showToast('Bạn cần đăng nhập để lưu GIF.', 'error');
+      return;
+    }
+    const wasSaved = this.savedGifs.some(item => item.gif_url === gifUrl);
+    try {
+      const res = await fetch('/api/giphy/saved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: this.currentUser.id,
+          action: wasSaved ? 'REMOVE' : 'SAVE',
+          gif_url: gifUrl,
+          title: title || 'GIF'
+        })
+      });
+      const data = await this.readApiResponse(res);
+      if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Không thể cập nhật GIF đã lưu.');
+      if (wasSaved) {
+        this.savedGifs = this.savedGifs.filter(item => item.gif_url !== gifUrl);
+      } else {
+        this.savedGifs.unshift({ gif_url: gifUrl, title: title || 'GIF', saved_at: new Date().toISOString() });
+      }
+      this.savedGifsLoaded = true;
+      this.savedGifsUserId = this.currentUser.id;
+      this.savedGifsError = '';
+      if (this.gifPickerView === 'saved') this.renderSavedGifs();
+      else this.renderGifItems(this.gifSearchResults);
+      this.showToast(wasSaved ? 'Đã xóa GIF khỏi danh sách đã lưu.' : 'Đã lưu GIF.', 'success');
+    } catch (error) {
+      this.showToast(error.message || 'Không thể cập nhật GIF đã lưu.', 'error');
+    }
   }
 
   async selectGif(gifUrl) {

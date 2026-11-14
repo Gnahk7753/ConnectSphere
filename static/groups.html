@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Nhóm - ConnectSphere</title>
   <script>if (localStorage.getItem('cs_theme') === 'dark') document.documentElement.dataset.theme = 'dark';</script>
-  <link rel="stylesheet" href="css/style.css?v=20261115-nav-help">
+  <link rel="stylesheet" href="css/style.css?v=20261115-gif-saved">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
   <style>
     .groups-layout { display:grid; grid-template-columns:280px minmax(0,1fr); gap:16px; width:100%; max-width:1100px; margin:0 auto; padding:16px; align-items:start; }
@@ -148,7 +148,7 @@
       <div id="groupsMainTitle" style="font-size:1.15rem;font-weight:700;margin-bottom:12px;">Hoạt động mới đây</div>
       <div id="groupComposer" class="composer-box" style="display:none;">
         <input type="text" id="groupPostTitle" class="group-composer-title" maxlength="100" placeholder="Tiêu đề bài viết (không bắt buộc)">
-        <textarea id="groupPostContent" placeholder="Viết gì đó cho nhóm..."></textarea>
+        <textarea id="groupPostContent" maxlength="1500" placeholder="Viết gì đó cho nhóm..."></textarea>
         <div id="groupMediaPreview" style="display:none;margin-top:8px;"></div>
         <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;flex-wrap:wrap;">
           <div style="display:flex;gap:8px;">
@@ -211,7 +211,7 @@
               <button type="button" class="btn-icon" aria-label="Đóng" onclick="groupsPage.closeEditPost()">✕</button>
             </div>
             <input id="groupPostEditTitleInput" type="text" maxlength="100" aria-label="Tiêu đề bài viết" placeholder="Tiêu đề bài viết (không bắt buộc)" style="width:100%;padding:12px;margin-bottom:8px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-surface-secondary);color:var(--text-main);">
-            <textarea id="groupPostEditContent" rows="6" maxlength="10000" aria-label="Nội dung bài viết" style="width:100%;padding:12px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-surface-secondary);color:var(--text-main);resize:vertical;"></textarea>
+            <textarea id="groupPostEditContent" rows="6" maxlength="1500" aria-label="Nội dung bài viết" style="width:100%;padding:12px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-surface-secondary);color:var(--text-main);resize:vertical;"></textarea>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
               <button type="button" class="btn-secondary" onclick="groupsPage.closeEditPost()">Hủy</button>
               <button type="button" class="btn-primary" onclick="groupsPage.saveEditedPost()">Lưu thay đổi</button>
@@ -232,7 +232,7 @@
         <div class="comment-input-row">
           <img id="groupCommentMyAvatar" src="/img/default-avatar.svg" alt="Ảnh đại diện của bạn">
           <div class="comment-compose-field">
-            <input id="groupCommentInput" type="text" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') groupsPage.sendGroupComment()">
+            <input id="groupCommentInput" type="text" autocomplete="off" placeholder="Viết bình luận công khai..." onkeydown="if(event.key === 'Enter') groupsPage.sendGroupComment()">
             <div class="comment-compose-tools">
               <button type="button" title="Biểu tượng cảm xúc" aria-label="Biểu tượng cảm xúc" onclick="app.openCommentEmojiPicker('groupCommentInput')">🙂</button>
               <label title="Chọn ảnh hoặc video" aria-label="Chọn ảnh hoặc video">📷
@@ -248,7 +248,7 @@
     </div>
   </div>
 
-  <script src="js/app.js?v=20261115-profile-id-fix"></script>
+  <script src="js/app.js?v=20261115-gif-saved"></script>
   <script>
     const groupsPage = {
       currentView: 'feed',
@@ -663,7 +663,7 @@
               </div>
             </div>
             ${post.title ? `<h3 class="group-post-title">${app.escapeHtml(post.title)}</h3>` : ''}
-            ${post.content ? `<div class="post-content">${app.escapeHtml(post.content)}</div>` : ''}
+            ${post.content ? app.renderExpandablePostContent(post.content, `group-${post.id}`) : ''}
             ${media}
             ${actions}
           </article>`;

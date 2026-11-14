@@ -548,7 +548,7 @@ inline bool isAllowedMediaHost(const std::string& url) {
     return false;
 }
 
-// kind: IMAGE | VIDEO | AUDIO | FILE
+// kind: IMAGE | VIDEO | GIF | AUDIO | FILE
 inline bool isSafeMediaUrl(const std::string& url, const std::string& kind) {
     if (url.empty()) return true;
     if (url.rfind("data:", 0) == 0) {

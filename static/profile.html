@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Trang cá nhân - ConnectSphere</title>
   <script>if (localStorage.getItem('cs_theme') === 'dark') document.documentElement.dataset.theme = 'dark';</script>
-  <link rel="stylesheet" href="css/style.css?v=20261115-nav-help">
+  <link rel="stylesheet" href="css/style.css?v=20261115-gif-saved">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
 </head>
 <body>
@@ -204,7 +204,7 @@
         📎
         <input type="file" id="chatMediaInput" accept="image/*,video/*" style="display:none" onchange="app.handleChatMediaUpload(this)">
       </label>
-      <input type="text" id="chatInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
+      <input type="text" id="chatInput" autocomplete="off" placeholder="Nhập tin nhắn..." onkeypress="if(event.key === 'Enter') app.sendChatMessage()">
       <button onclick="app.sendChatMessage()">➤</button>
     </div>
   </div>
@@ -279,7 +279,7 @@
         </div>
         <div class="comment-input-row">
           <img id="cmtMyAvatar" src="/img/default-avatar.svg" alt="My avatar">
-          <input type="text" id="modalCommentInput" placeholder="Viết bình luận công khai..." onkeypress="if(event.key === 'Enter') app.submitCommentFromModal()">
+          <input type="text" id="modalCommentInput" autocomplete="off" placeholder="Viết bình luận công khai..." onkeypress="if(event.key === 'Enter') app.submitCommentFromModal()">
           <button onclick="app.submitCommentFromModal()">➤</button>
         </div>
       </div>
@@ -350,7 +350,7 @@
       </div>
       <div class="form-group">
         <label>Lời nhắn kèm theo (tùy chọn):</label>
-        <textarea id="shareChatMessageInput" placeholder="Bạn thấy bài viết này thế nào?..."></textarea>
+        <textarea id="shareChatMessageInput" autocomplete="off" placeholder="Bạn thấy bài viết này thế nào?..."></textarea>
       </div>
       <div style="display: flex; gap: 0.5rem;">
         <button class="btn-secondary" style="flex: 1;" onclick="app.closeShareToChatModal()">Hủy</button>
@@ -582,7 +582,7 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261115-profile-id-fix"></script>
+  <script src="js/app.js?v=20261115-gif-saved"></script>
   <script>
     // Tab switching in profile page
     function switchProfileTab(tab) {
