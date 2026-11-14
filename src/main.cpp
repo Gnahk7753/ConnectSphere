@@ -9,6 +9,9 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include "httplib.h"
 #include <nlohmann/json.hpp>
 #include "Models.h"
@@ -17,6 +20,39 @@
 #include "GeminiService.h"
 
 using json = nlohmann::json;
+
+static bool isMountedDirectory(const std::filesystem::path& mountPath) {
+#if defined(__linux__)
+    std::ifstream mountInfo("/proc/self/mountinfo");
+    if (!mountInfo) return false;
+
+    std::string line;
+    while (std::getline(mountInfo, line)) {
+        std::istringstream fields(line);
+        std::string mountId, parentId, device, root, mountedPath;
+        if (!(fields >> mountId >> parentId >> device >> root >> mountedPath)) continue;
+
+        std::string decodedPath;
+        for (size_t i = 0; i < mountedPath.size(); ++i) {
+            if (mountedPath[i] == '\\' && i + 3 < mountedPath.size() &&
+                mountedPath[i + 1] >= '0' && mountedPath[i + 1] <= '7' &&
+                mountedPath[i + 2] >= '0' && mountedPath[i + 2] <= '7' &&
+                mountedPath[i + 3] >= '0' && mountedPath[i + 3] <= '7') {
+                const int value = (mountedPath[i + 1] - '0') * 64 +
+                    (mountedPath[i + 2] - '0') * 8 + (mountedPath[i + 3] - '0');
+                decodedPath.push_back(static_cast<char>(value));
+                i += 3;
+            } else {
+                decodedPath.push_back(mountedPath[i]);
+            }
+        }
+        if (std::filesystem::path(decodedPath).lexically_normal() == mountPath) return true;
+    }
+#else
+    (void)mountPath;
+#endif
+    return false;
+}
 
 // ---- Phân quyền Admin / User ----
 // Phiên làm việc của quản trị viên: token ngẫu nhiên do SERVER cấp khi đăng nhập,
@@ -604,7 +640,38 @@ int main() {
     GeminiService::instance().loadEnv(".env");
 
     Database db;
-    const std::string databasePath = sec::envOr("DATABASE_PATH", "data/social_network.db");
+    const bool production = sec::envFlag("PRODUCTION");
+    const std::string databasePath = sec::envOr("DATABASE_PATH", production ? "" : "data/social_network.db");
+    if (production) {
+        const std::string databaseMountPath = sec::envOr("DATABASE_MOUNT_PATH");
+        if (databasePath.empty() || databaseMountPath.empty()) {
+            std::cerr << "[Database] PRODUCTION=1 yêu cầu DATABASE_PATH và DATABASE_MOUNT_PATH trỏ tới Persistent Disk."
+                      << std::endl;
+            return 1;
+        }
+
+        const std::filesystem::path dbFile(databasePath);
+        const std::filesystem::path mountDirectory(databaseMountPath);
+        if (!dbFile.is_absolute() || !mountDirectory.is_absolute()) {
+            std::cerr << "[Database] DATABASE_PATH và DATABASE_MOUNT_PATH phải là đường dẫn tuyệt đối." << std::endl;
+            return 1;
+        }
+
+        const std::filesystem::path normalizedDbFile = dbFile.lexically_normal();
+        const std::filesystem::path normalizedMountDirectory = mountDirectory.lexically_normal();
+        const std::filesystem::path relativeDbFile = normalizedDbFile.lexically_relative(normalizedMountDirectory);
+        const bool dbInsideMount = !relativeDbFile.empty() && !relativeDbFile.is_absolute() &&
+            *relativeDbFile.begin() != "..";
+        std::error_code mountError;
+        const bool mountExists = std::filesystem::is_directory(normalizedMountDirectory, mountError);
+        if (!dbInsideMount || !mountExists || mountError || !isMountedDirectory(normalizedMountDirectory)) {
+            std::cerr << "[Database] Không khởi động để tránh mất dữ liệu: DATABASE_PATH phải nằm bên trong "
+                      << "Persistent Disk đang được mount tại DATABASE_MOUNT_PATH." << std::endl;
+            return 1;
+        }
+        std::cerr << "[Database] Persistent Disk mount: " << normalizedMountDirectory.string() << std::endl;
+    }
+
     std::cerr << "[Database] SQLite path: " << databasePath << std::endl;
     if (!db.init(databasePath)) {
         std::cerr << "Lỗi: Không thể khởi tạo SQLite Database!" << std::endl;

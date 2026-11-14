@@ -56,10 +56,10 @@ Dự án có thể build trên Linux bằng CMake và deploy trên Render qua Do
    - `TRUST_PROXY=1`
    - Thêm `GOOGLE_CLIENT_ID` để bật đăng nhập/tạo tài khoản bằng Google. Có thể thêm `GEMINI_API_KEY` để bật kiểm duyệt nội dung bằng Gemini.
    - Thêm `GIPHY_API_KEY` để bật tìm kiếm GIF trong bình luận.
-4. Để dữ liệu không mất sau khi service khởi động lại hoặc deploy, gắn **Persistent Disk** cho service. Ví dụ, đặt mount path là `/var/data`, sau đó đặt `DATABASE_PATH=/var/data/social_network.db` trong Environment. Đường dẫn `DATABASE_PATH` phải nằm bên trong mount path của disk. Nếu disk của bạn đang mount tại `/app/data`, đặt `DATABASE_PATH=/app/data/social_network.db`. Máy chủ tự tạo thư mục cha nếu thiếu, nhưng thư mục phải nằm trên disk đã mount và có quyền ghi.
+4. Gắn **Persistent Disk** cho service. Trong Environment, đặt `DATABASE_MOUNT_PATH` đúng bằng **Mount Path** của disk và đặt `DATABASE_PATH` trỏ đến file bên trong đó. Ví dụ, nếu Mount Path là `/var/data`, đặt `DATABASE_MOUNT_PATH=/var/data` và `DATABASE_PATH=/var/data/social_network.db`. Máy chủ production sẽ từ chối khởi động nếu thiếu các biến này, nếu DB nằm ngoài mount path hoặc nếu path chưa phải disk đã mount.
 5. Deploy. Ứng dụng tự đọc `PORT` do Render cấp; không cần đặt cổng cố định.
 
-Không bật `SEED_DEMO_DATA` trên production. Cơ sở dữ liệu local bị loại khỏi Docker image; nếu chưa gắn Persistent Disk, SQLite nằm trên filesystem tạm và sẽ mất sau khi Render redeploy hoặc khởi động lại service. Chỉ đặt `DATABASE_PATH` thôi không tạo vùng lưu trữ bền vững.
+Không bật `SEED_DEMO_DATA` trên production. Cơ sở dữ liệu local bị loại khỏi Docker image. Chỉ đặt `DATABASE_PATH` thôi không tạo vùng lưu trữ bền vững; phải gắn Persistent Disk và để `DATABASE_PATH` nằm dưới `DATABASE_MOUNT_PATH`.
 
 ## Cấu hình tùy chọn
 
@@ -72,6 +72,7 @@ Có thể truyền cấu hình qua biến môi trường hoặc file `.env` cụ
 | `GOOGLE_CLIENT_ID` | Bắt buộc để đăng nhập Google và tạo tài khoản mới |
 | `GIPHY_API_KEY` | Bật tìm kiếm GIF trong bình luận |
 | `DATABASE_PATH` | Đường dẫn đầy đủ tới file SQLite; trên Render phải nằm dưới mount path của Persistent Disk |
+| `DATABASE_MOUNT_PATH` | Mount Path của Render Persistent Disk; bắt buộc khi `PRODUCTION=1` |
 | `ADMIN_PASSWORD` | Đặt mật khẩu tài khoản quản trị |
 | `SEED_DEMO_DATA=1` | Nạp dữ liệu mẫu khi khởi tạo cơ sở dữ liệu trống |
 
