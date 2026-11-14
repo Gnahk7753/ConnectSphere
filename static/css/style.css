@@ -201,6 +201,11 @@ body {
   font-size: 0.9rem;
 }
 
+.mobile-primary-link,
+.mobile-primary-search {
+  display: none;
+}
+
 /* ================= MAIN CONTAINER ================= */
 .main-wrapper {
   max-width: 1400px;
@@ -3056,6 +3061,112 @@ button.sidebar-nav-item {
   }
   .sidebar, .nav-search {
     display: none;
+  }
+  .navbar.has-mobile-primary-nav {
+    height: auto;
+    min-height: 0;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 0;
+    padding: 8px 10px 0;
+  }
+  .navbar.has-mobile-primary-nav .nav-left {
+    width: 100%;
+    flex: 0 0 auto;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .navbar.has-mobile-primary-nav .logo-container {
+    min-width: 0;
+    gap: 7px;
+    font-size: 0.98rem;
+  }
+  .navbar.has-mobile-primary-nav .logo-container span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .navbar.has-mobile-primary-nav .mobile-primary-search {
+    display: flex;
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: var(--text-main);
+    background: var(--bg-surface-secondary);
+    text-decoration: none;
+  }
+  .navbar.has-mobile-primary-nav .mobile-primary-search.active {
+    color: #fff;
+    background: #1877f2;
+  }
+  .mobile-primary-search svg {
+    width: 23px;
+    height: 23px;
+  }
+  .navbar.has-mobile-primary-nav .nav-right {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 2px;
+    width: 100%;
+    padding: 6px 0 4px;
+    margin-top: 6px;
+    border-top: 1px solid var(--border-color);
+  }
+  .navbar.has-mobile-primary-nav .mobile-nav-hidden {
+    display: none !important;
+  }
+  .mobile-primary-link {
+    display: flex;
+    min-width: 0;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+  .mobile-primary-link svg {
+    width: 24px;
+    height: 24px;
+  }
+  .mobile-primary-link.active,
+  .navbar.has-mobile-primary-nav .user-nav-badge.mobile-profile-current {
+    color: #fff;
+    background: #1877f2;
+  }
+  .navbar.has-mobile-primary-nav #navUserBadge.mobile-profile-current {
+    background: #1877f2;
+  }
+  .navbar.has-mobile-primary-nav .nav-dropdown-wrapper {
+    width: 100%;
+  }
+  .navbar.has-mobile-primary-nav #notificationBtn,
+  .navbar.has-mobile-primary-nav #logoutBtn {
+    width: 100%;
+    height: 48px;
+    border-radius: 8px;
+    background: transparent;
+  }
+  .navbar.has-mobile-primary-nav #navUserBadge {
+    width: 100%;
+    height: 48px;
+    justify-content: center;
+    padding: 0;
+    border-radius: 8px;
+    background: transparent;
+  }
+  .navbar.has-mobile-primary-nav #navUserBadge img {
+    width: 28px;
+    height: 28px;
+  }
+  .navbar.has-mobile-primary-nav .notif-dropdown {
+    top: 116px;
+    max-height: calc(100vh - 124px);
   }
   .navbar {
     gap: 0.5rem;

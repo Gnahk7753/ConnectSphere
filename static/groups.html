@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Nhóm - Mạng Xã Hội Mini</title>
-  <link rel="stylesheet" href="css/style.css?v=20261114-authfix1">
+  <link rel="stylesheet" href="css/style.css?v=20261115-mobile-nav1">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
   <style>
     .groups-layout { display:grid; grid-template-columns:280px minmax(0,1fr); gap:16px; width:100%; max-width:1100px; margin:0 auto; padding:16px; align-items:start; }
@@ -59,9 +59,11 @@
     .group-avatar-file-label { display:inline-flex; align-items:center; justify-content:center; min-height:40px; padding:8px 12px; border-radius:8px; color:var(--text-main); background:var(--bg-surface-secondary); font-weight:600; cursor:pointer; }
     .group-avatar-file-label:hover { background:var(--bg-surface-hover); }
     .composer-box { background:var(--card-bg,#fff); border-radius:12px; padding:12px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+    .group-composer-title { width:100%; margin-bottom:8px; border:1px solid var(--border,#ddd); border-radius:8px; padding:10px; box-sizing:border-box; font:inherit; font-weight:600; color:var(--text-main); background:var(--bg-surface); }
     .composer-box textarea { width:100%; min-height:70px; border:1px solid var(--border,#ddd); border-radius:8px; padding:8px; box-sizing:border-box; resize:vertical; }
     .group-post-card { gap:12px; }
     .group-post-card .post-header-left { cursor:pointer; }
+    .group-post-title { margin:0 0 8px; font-size:1.15rem; line-height:1.35; }
     .group-post-card .post-content { word-break:break-word; }
     .group-post-card .post-stats > div { display:flex; align-items:center; gap:5px; }
     .group-post-card .post-stats > div:last-child { cursor:pointer; }
@@ -70,7 +72,7 @@
     .group-comment-modal .comment-modal-actions { display:none; }
     @media (max-width:760px) {
       .groups-layout { display:flex; flex-direction:column; padding:12px; }
-      .groups-left { position:sticky; left:auto; top:60px; bottom:auto; z-index:90; width:100%; max-height:42vh; overflow-y:auto; }
+      .groups-left { position:sticky; left:auto; top:120px; bottom:auto; z-index:90; width:100%; max-height:42vh; overflow-y:auto; }
       .groups-right { width:100%; }
     }
   </style>
@@ -145,6 +147,7 @@
     <main class="groups-right">
       <div id="groupsMainTitle" style="font-size:1.15rem;font-weight:700;margin-bottom:12px;">Hoạt động mới đây</div>
       <div id="groupComposer" class="composer-box" style="display:none;">
+        <input type="text" id="groupPostTitle" class="group-composer-title" maxlength="100" placeholder="Tiêu đề bài viết (không bắt buộc)">
         <textarea id="groupPostContent" placeholder="Viết gì đó cho nhóm..."></textarea>
         <div id="groupMediaPreview" style="display:none;margin-top:8px;"></div>
         <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;flex-wrap:wrap;">
@@ -208,6 +211,7 @@
               <h2 id="groupPostEditTitle" style="font-size:1.15rem;">Chỉnh sửa bài viết</h2>
               <button type="button" class="btn-icon" aria-label="Đóng" onclick="groupsPage.closeEditPost()">✕</button>
             </div>
+            <input id="groupPostEditTitleInput" type="text" maxlength="100" aria-label="Tiêu đề bài viết" placeholder="Tiêu đề bài viết (không bắt buộc)" style="width:100%;padding:12px;margin-bottom:8px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-surface-secondary);color:var(--text-main);">
             <textarea id="groupPostEditContent" rows="6" maxlength="10000" aria-label="Nội dung bài viết" style="width:100%;padding:12px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-surface-secondary);color:var(--text-main);resize:vertical;"></textarea>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
               <button type="button" class="btn-secondary" onclick="groupsPage.closeEditPost()">Hủy</button>
@@ -235,7 +239,7 @@
     </div>
   </div>
 
-  <script src="js/app.js?v=20261115-auth-groups2"></script>
+  <script src="js/app.js?v=20261115-mobile-nav1"></script>
   <script>
     const groupsPage = {
       currentView: 'feed',
@@ -505,7 +509,7 @@
               pendingHtml = `<div class="group-feed-card" style="border:1px solid #fbbf24;"><strong>Bài chờ duyệt (${pending.length})</strong>` +
                 pending.map(p => `
                   <div style="margin-top:10px;padding-top:10px;border-top:1px solid #eee;">
-                    <div style="font-size:.85rem;"><strong>${app.escapeHtml(p.author_name)}</strong>: ${app.escapeHtml(p.content)}</div>
+                  <div style="font-size:.85rem;"><strong>${app.escapeHtml(p.author_name)}</strong>${p.title ? `<div style="font-weight:700;margin-top:4px;">${app.escapeHtml(p.title)}</div>` : ''}<div>${app.escapeHtml(p.content || '')}</div></div>
                     <div style="margin-top:6px;display:flex;gap:8px;">
                       <button class="btn-primary" onclick="groupsPage.approvePost('${p.id}', true)">Duyệt</button>
                       <button onclick="groupsPage.approvePost('${p.id}', false)">Từ chối</button>
@@ -649,7 +653,8 @@
                 </div>
               </div>
             </div>
-            <div class="post-content">${app.escapeHtml(post.content || '')}</div>
+            ${post.title ? `<h3 class="group-post-title">${app.escapeHtml(post.title)}</h3>` : ''}
+            ${post.content ? `<div class="post-content">${app.escapeHtml(post.content)}</div>` : ''}
             ${media}
             ${actions}
           </article>`;
@@ -752,7 +757,7 @@
         document.getElementById('groupCommentPostAvatar').src = post.author_avatar || '/img/default-avatar.svg';
         document.getElementById('groupCommentPostAuthor').textContent = post.author_name || '';
         document.getElementById('groupCommentPostTime').textContent = `🕒 ${app.formatTimeAgo(post.created_at)}`;
-        document.getElementById('groupCommentPostContent').textContent = post.content || '';
+        document.getElementById('groupCommentPostContent').textContent = [post.title, post.content].filter(Boolean).join('\n\n');
         document.getElementById('groupCommentPostMedia').innerHTML = app.renderPostMedia
           ? app.renderPostMedia(post.media_type, post.media_url, 'post-media-box')
           : '';
@@ -878,9 +883,10 @@
         const post = this.postsById.get(postId);
         if (!post || post.author_id !== app.currentUser.id) return;
         this.editingPostId = postId;
+        document.getElementById('groupPostEditTitleInput').value = post.title || '';
         document.getElementById('groupPostEditContent').value = post.content || '';
         document.getElementById('groupPostEditModal').style.display = 'flex';
-        document.getElementById('groupPostEditContent').focus();
+        document.getElementById('groupPostEditTitleInput').focus();
       },
 
       closeEditPost() {
@@ -891,19 +897,21 @@
       async saveEditedPost() {
         const postId = this.editingPostId;
         const post = this.postsById.get(postId);
+        const title = document.getElementById('groupPostEditTitleInput').value.trim();
         const content = document.getElementById('groupPostEditContent').value.trim();
-        if (!post || !content) {
-          app.showToast('Nội dung bài viết không được để trống.', 'error');
+        if (!post || (!title && !content)) {
+          app.showToast('Nhập tiêu đề hoặc nội dung bài viết.', 'error');
           return;
         }
         try {
           const res = await fetch('/api/community-groups/posts/edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ post_id: postId, user_id: app.currentUser.id, content })
+            body: JSON.stringify({ post_id: postId, user_id: app.currentUser.id, title, content })
           });
           const data = await res.json();
           if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Không thể cập nhật bài viết.');
+          post.title = title;
           post.content = content;
           this.updateGroupPostCard(post);
           this.closeEditPost();
@@ -1048,18 +1056,20 @@
 
       async submitPost() {
         if (!this.currentGroupId) return;
+        const title = document.getElementById('groupPostTitle').value.trim();
         const content = document.getElementById('groupPostContent').value.trim();
         // Nếu user chọn GIF qua picker post, lấy từ app.currentMedia
         if (app.currentMedia && app.currentMedia.type === 'IMAGE' && app.currentMedia.url && (!this.media || this.media.type==='NONE')) {
           this.media = { type: 'IMAGE', url: app.currentMedia.url };
         }
-        if (!content && (!this.media || this.media.type==='NONE')) { app.showToast('Nội dung trống', 'error'); return; }
+        if (!title && !content && (!this.media || this.media.type==='NONE')) { app.showToast('Nhập tiêu đề, nội dung hoặc thêm ảnh/video.', 'error'); return; }
         const res = await fetch('/api/community-groups/posts', {
           method: 'POST', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
             group_id: this.currentGroupId,
             author_id: app.currentUser.id,
-            content: content || (this.media.type==='IMAGE' ? ' ' : ''),
+            title,
+            content,
             media_type: this.media.type || 'NONE',
             media_url: this.media.url || ''
           })
@@ -1067,6 +1077,7 @@
         const data = await res.json();
         if (data.status !== 'ok') { app.showToast(data.message || 'Không thể đăng', 'error'); return; }
         app.showToast(data.message || 'Đã gửi bài', 'success');
+        document.getElementById('groupPostTitle').value = '';
         document.getElementById('groupPostContent').value = '';
         this.clearMedia();
         if (app.currentMedia) app.currentMedia = { type: 'NONE', url: '' };

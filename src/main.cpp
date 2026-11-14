@@ -2959,11 +2959,16 @@ int main() {
             auto body = json::parse(req.body);
             std::string groupId = body.value("group_id", "");
             std::string authorId = body.value("author_id", "");
-            std::string content = body.value("content", "");
+            std::string title = trimStr(body.value("title", ""));
+            std::string content = trimStr(body.value("content", ""));
             std::string mediaType = body.value("media_type", "NONE");
             std::string mediaUrl = body.value("media_url", "");
+            if (title.empty() && content.empty() && mediaType == "NONE") {
+                sendJsonError(res, 400, "Nhập tiêu đề, nội dung hoặc thêm ảnh/video.");
+                return;
+            }
             std::string postId, status;
-            if (db.createCommunityGroupPost(groupId, authorId, content, mediaType, mediaUrl, postId, status)) {
+            if (db.createCommunityGroupPost(groupId, authorId, title, content, mediaType, mediaUrl, postId, status)) {
                 res.set_content(json({{"status", "ok"}, {"post_id", postId}, {"approval_status", status},
                     {"message", status == "APPROVED" ? "Đã đăng bài!" : "Bài viết đang chờ admin phê duyệt!"}}).dump(), "application/json; charset=utf-8");
             } else {
@@ -3018,12 +3023,13 @@ int main() {
             auto body = json::parse(req.body);
             const std::string postId = body.value("post_id", "");
             const std::string userId = body.value("user_id", "");
+            const std::string title = trimStr(body.value("title", ""));
             const std::string content = trimStr(body.value("content", ""));
-            if (postId.empty() || userId.empty() || content.empty()) {
-                sendJsonError(res, 400, "Vui lòng nhập nội dung bài viết.");
+            if (postId.empty() || userId.empty() || (title.empty() && content.empty())) {
+                sendJsonError(res, 400, "Nhập tiêu đề hoặc nội dung bài viết.");
                 return;
             }
-            if (!db.editCommunityGroupPost(postId, userId, content)) {
+            if (!db.editCommunityGroupPost(postId, userId, title, content)) {
                 sendJsonError(res, 403, "Bạn không có quyền sửa bài viết này hoặc bài viết không còn tồn tại.");
                 return;
             }

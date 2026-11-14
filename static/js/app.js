@@ -9597,8 +9597,79 @@ class AppClient {
   }
 }
 
+function installMobilePrimaryNavigation() {
+  const page = window.location.pathname.split('/').filter(Boolean).pop()?.toLowerCase() || 'index.html';
+  if (page === 'admin.html') return;
+
+  const navbar = document.querySelector('.navbar');
+  const navLeft = navbar?.querySelector('.nav-left');
+  const navRight = navbar?.querySelector('.nav-right');
+  if (!navbar || !navLeft || !navRight) return;
+
+  navbar.classList.add('has-mobile-primary-nav');
+
+  if (!navLeft.querySelector('.mobile-primary-search')) {
+    const searchLink = document.createElement('a');
+    searchLink.className = 'mobile-primary-search';
+    searchLink.href = 'search.html';
+    searchLink.title = 'Tìm kiếm';
+    searchLink.setAttribute('aria-label', 'Tìm kiếm');
+    searchLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></svg>';
+    navLeft.append(searchLink);
+  }
+
+  const profileBadge = navRight.querySelector('#navUserBadge');
+  const logoutButton = navRight.querySelector('#logoutBtn');
+  let notificationWrapper = navRight.querySelector('.nav-dropdown-wrapper');
+  if (!notificationWrapper) {
+    notificationWrapper = document.createElement('div');
+    notificationWrapper.className = 'nav-dropdown-wrapper';
+    notificationWrapper.innerHTML = `
+      <button class="btn-icon" id="notificationBtn" title="Thông báo" onclick="app.toggleNotificationDropdown()">
+        🔔<span class="badge-counter" id="unreadNotifCount" style="display:none;">0</span>
+      </button>
+      <div class="notif-dropdown" id="notificationDropdown" style="display:none;">
+        <div class="notif-dropdown-header"><h4>Thông báo</h4><button onclick="app.markAllNotificationsRead()">Đã đọc tất cả</button></div>
+        <div class="notif-list" id="notifList"><div style="padding:1rem;text-align:center;color:var(--text-muted);font-size:.85rem;">Không có thông báo mới</div></div>
+      </div>`;
+    navRight.insertBefore(notificationWrapper, profileBadge || logoutButton || null);
+  }
+
+  const links = [
+    { href: 'index.html', key: 'index.html', label: 'Trang chủ', icon: '<path d="m3 10 9-7 9 7"></path><path d="M5 9v11h14V9M9 20v-6h6v6"></path>' },
+    { href: 'friends.html', key: 'friends.html', label: 'Bạn bè', icon: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path>' },
+    { href: 'groups.html', key: 'groups.html', label: 'Nhóm', icon: '<path d="M3 7.5 12 3l9 4.5-9 4.5-9-4.5Z"></path><path d="M3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5"></path>' }
+  ];
+
+  links.forEach(({ href, key, label, icon }) => {
+    if (navRight.querySelector(`.mobile-primary-link[href="${href}"]`)) return;
+    const link = document.createElement('a');
+    link.className = 'mobile-primary-link';
+    link.href = href;
+    link.title = label;
+    link.setAttribute('aria-label', label);
+    link.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+    if (page === key) {
+      link.classList.add('active');
+      link.setAttribute('aria-current', 'page');
+    }
+    navRight.insertBefore(link, notificationWrapper);
+  });
+
+  const searchLink = navLeft.querySelector('.mobile-primary-search');
+  if (page === 'search.html') searchLink?.classList.add('active');
+  if (page === 'profile.html') profileBadge?.classList.add('mobile-profile-current');
+
+  navRight.querySelectorAll(':scope > *').forEach(child => {
+    if (child.classList.contains('mobile-primary-link') ||
+        child === notificationWrapper || child === profileBadge || child === logoutButton) return;
+    child.classList.add('mobile-nav-hidden');
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   window.app = new AppClient();
+  installMobilePrimaryNavigation();
 });
 
 

@@ -767,6 +767,7 @@ private:
         tryAlter("ALTER TABLE comments ADD COLUMN reply_to_author TEXT DEFAULT '';");
         tryAlter("ALTER TABLE reports ADD COLUMN reported_comment_id TEXT DEFAULT '';");
         tryAlter("ALTER TABLE posts ADD COLUMN title TEXT DEFAULT '';");
+        tryAlter("ALTER TABLE community_group_posts ADD COLUMN title TEXT DEFAULT '';");
         tryAlter("ALTER TABLE reports ADD COLUMN resolution_note TEXT DEFAULT '';");
         tryAlter("ALTER TABLE reports ADD COLUMN resolved_by TEXT DEFAULT '';");
         tryAlter("ALTER TABLE reports ADD COLUMN resolved_at TEXT DEFAULT '';");
@@ -865,6 +866,7 @@ private:
                 id TEXT PRIMARY KEY,
                 group_id TEXT NOT NULL,
                 author_id TEXT NOT NULL,
+                title TEXT DEFAULT '',
                 content TEXT NOT NULL,
                 media_type TEXT DEFAULT 'NONE',
                 media_url TEXT DEFAULT '',
@@ -5649,9 +5651,9 @@ public:
     }
 
     bool createCommunityGroupPost(const std::string& groupId, const std::string& authorId,
-                                  const std::string& content, const std::string& mediaType,
+                                  const std::string& title, const std::string& content, const std::string& mediaType,
                                   const std::string& mediaUrl, std::string& outPostId, std::string& outStatus) {
-        if (groupId.empty() || authorId.empty() || content.empty()) return false;
+        if (groupId.empty() || authorId.empty() || (title.empty() && content.empty() && mediaType == "NONE")) return false;
         std::lock_guard<std::mutex> lock(dbMutex);
         // check membership + role
         const char* roleSql = "SELECT role FROM community_group_members WHERE group_id = ? AND user_id = ? LIMIT 1;";
@@ -5668,17 +5670,18 @@ public:
         outStatus = status;
         std::string postId = "CGP" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
         std::string timeStr = getCurrentTimeStr();
-        const char* sql = "INSERT INTO community_group_posts (id, group_id, author_id, content, media_type, media_url, approval_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
+        const char* sql = "INSERT INTO community_group_posts (id, group_id, author_id, title, content, media_type, media_url, approval_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
         sqlite3_bind_text(stmt, 1, postId.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 2, groupId.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 3, authorId.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 4, content.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 5, mediaType.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 6, mediaUrl.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 7, status.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 8, timeStr.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, title.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, content.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 6, mediaType.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 7, mediaUrl.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 8, status.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 9, timeStr.c_str(), -1, SQLITE_STATIC);
         bool ok = sqlite3_step(stmt) == SQLITE_DONE;
         sqlite3_finalize(stmt);
         if (ok) outPostId = postId;
@@ -5719,7 +5722,8 @@ public:
                        p.media_type, p.media_url, p.approval_status, p.created_at, u.user_token,
                        (SELECT COUNT(*) FROM community_group_post_reactions r WHERE r.post_id = p.id) AS react_cnt,
                        (SELECT COUNT(*) FROM community_group_post_comments c WHERE c.post_id = p.id) AS cmt_cnt,
-                       (SELECT type FROM community_group_post_reactions r WHERE r.post_id = p.id AND r.user_id = ? LIMIT 1) AS my_reaction
+                       (SELECT type FROM community_group_post_reactions r WHERE r.post_id = p.id AND r.user_id = ? LIMIT 1) AS my_reaction,
+                       p.title
                 FROM community_group_posts p
                 JOIN community_groups g ON g.id = p.group_id
                 JOIN users u ON u.id = p.author_id
@@ -5737,7 +5741,8 @@ public:
                        p.media_type, p.media_url, p.approval_status, p.created_at, u.user_token,
                        (SELECT COUNT(*) FROM community_group_post_reactions r WHERE r.post_id = p.id) AS react_cnt,
                        (SELECT COUNT(*) FROM community_group_post_comments c WHERE c.post_id = p.id) AS cmt_cnt,
-                       (SELECT type FROM community_group_post_reactions r WHERE r.post_id = p.id AND r.user_id = ? LIMIT 1) AS my_reaction
+                       (SELECT type FROM community_group_post_reactions r WHERE r.post_id = p.id AND r.user_id = ? LIMIT 1) AS my_reaction,
+                       p.title
                 FROM community_group_posts p
                 JOIN community_groups g ON g.id = p.group_id
                 JOIN users u ON u.id = p.author_id
@@ -5792,7 +5797,8 @@ public:
                 {"user_token", sqlite3_column_text(stmt, 11) ? (const char*)sqlite3_column_text(stmt, 11) : ""},
                 {"reaction_count", reactCnt},
                 {"comments_count", cmtCnt},
-                {"my_reaction", myReact}
+                {"my_reaction", myReact},
+                {"title", sqlite3_column_text(stmt, 15) ? (const char*)sqlite3_column_text(stmt, 15) : ""}
             });
         }
         sqlite3_finalize(stmt);
@@ -5810,7 +5816,7 @@ public:
         if (sqlite3_step(cStmt) != SQLITE_ROW) { sqlite3_finalize(cStmt); return arr; }
         sqlite3_finalize(cStmt);
         const char* sql = R"(
-            SELECT p.id, p.author_id, u.fullname, u.avatar, p.content, p.media_type, p.media_url, p.created_at
+            SELECT p.id, p.author_id, u.fullname, u.avatar, p.content, p.media_type, p.media_url, p.created_at, p.title
             FROM community_group_posts p JOIN users u ON u.id = p.author_id
             WHERE p.group_id = ? AND p.approval_status = 'PENDING'
             ORDER BY p.created_at ASC;
@@ -5828,6 +5834,7 @@ public:
                 {"media_type", sqlite3_column_text(stmt, 5) ? (const char*)sqlite3_column_text(stmt, 5) : "NONE"},
                 {"media_url", sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : ""},
                 {"created_at", (const char*)sqlite3_column_text(stmt, 7)},
+                {"title", sqlite3_column_text(stmt, 8) ? (const char*)sqlite3_column_text(stmt, 8) : ""},
                 {"approval_status", "PENDING"}
             });
         }
@@ -6023,15 +6030,17 @@ public:
         return true;
     }
 
-    bool editCommunityGroupPost(const std::string& postId, const std::string& userId, const std::string& content) {
-        if (postId.empty() || userId.empty() || content.empty()) return false;
+    bool editCommunityGroupPost(const std::string& postId, const std::string& userId,
+                                const std::string& title, const std::string& content) {
+        if (postId.empty() || userId.empty() || (title.empty() && content.empty())) return false;
         std::lock_guard<std::mutex> lock(dbMutex);
-        const char* sql = "UPDATE community_group_posts SET content = ? WHERE id = ? AND author_id = ?;";
+        const char* sql = "UPDATE community_group_posts SET title = ?, content = ? WHERE id = ? AND author_id = ?;";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-        sqlite3_bind_text(stmt, 1, content.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 2, postId.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 1, title.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, content.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, postId.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, userId.c_str(), -1, SQLITE_STATIC);
         const bool ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
         sqlite3_finalize(stmt);
         return ok;
@@ -6040,30 +6049,32 @@ public:
     // Chia sẻ bài nhóm ra bảng tin chính (tạo post PUBLIC)
     bool shareCommunityGroupPostToFeed(const std::string& groupPostId, const std::string& userId, const std::string& thoughts, std::string& outPostId) {
         std::lock_guard<std::mutex> lock(dbMutex);
-        const char* q = "SELECT content, media_type, media_url, approval_status, group_id FROM community_group_posts WHERE id = ? LIMIT 1;";
+        const char* q = "SELECT title, content, media_type, media_url, approval_status, group_id FROM community_group_posts WHERE id = ? LIMIT 1;";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, q, -1, &stmt, nullptr) != SQLITE_OK) return false;
         sqlite3_bind_text(stmt, 1, groupPostId.c_str(), -1, SQLITE_STATIC);
         if (sqlite3_step(stmt) != SQLITE_ROW) { sqlite3_finalize(stmt); return false; }
-        std::string content = (const char*)sqlite3_column_text(stmt, 0);
-        std::string mediaType = sqlite3_column_text(stmt, 1) ? (const char*)sqlite3_column_text(stmt, 1) : "NONE";
-        std::string mediaUrl = sqlite3_column_text(stmt, 2) ? (const char*)sqlite3_column_text(stmt, 2) : "";
-        std::string status = (const char*)sqlite3_column_text(stmt, 3);
+        std::string title = sqlite3_column_text(stmt, 0) ? (const char*)sqlite3_column_text(stmt, 0) : "";
+        std::string content = (const char*)sqlite3_column_text(stmt, 1);
+        std::string mediaType = sqlite3_column_text(stmt, 2) ? (const char*)sqlite3_column_text(stmt, 2) : "NONE";
+        std::string mediaUrl = sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : "";
+        std::string status = (const char*)sqlite3_column_text(stmt, 4);
         sqlite3_finalize(stmt);
         if (status != "APPROVED") return false;
 
         std::string shareText = thoughts.empty() ? ("Đã chia sẻ một bài từ nhóm:\n" + content) : (thoughts + "\n\n" + content);
         std::string postId = "POST" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
         std::string now = getCurrentTimeStr();
-        const char* ins = "INSERT INTO posts (id, author_id, content, media_type, media_url, created_at, visibility) VALUES (?, ?, ?, ?, ?, ?, 'PUBLIC');";
+        const char* ins = "INSERT INTO posts (id, author_id, content, title, media_type, media_url, created_at, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, 'PUBLIC');";
         sqlite3_stmt* inStmt = nullptr;
         if (sqlite3_prepare_v2(db, ins, -1, &inStmt, nullptr) != SQLITE_OK) return false;
         sqlite3_bind_text(inStmt, 1, postId.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(inStmt, 2, userId.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(inStmt, 3, shareText.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(inStmt, 4, mediaType.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(inStmt, 5, mediaUrl.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(inStmt, 6, now.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 4, title.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 5, mediaType.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 6, mediaUrl.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(inStmt, 7, now.c_str(), -1, SQLITE_STATIC);
         bool ok = sqlite3_step(inStmt) == SQLITE_DONE;
         sqlite3_finalize(inStmt);
         if (ok) outPostId = postId;
