@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mạng Xã Hội MIni</title>
-  <link rel="stylesheet" href="css/style.css?v=20261110-btnfix1">
+  <link rel="stylesheet" href="css/style.css?v=20261114-authfix1">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
   <!-- Google Identity Services (Google Sign-In) -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -205,16 +205,17 @@
               <input type="file" id="postVideoFile" accept="video/*" style="display: none;" onchange="app.handleVideoAttachment(this)">
             </label>
             <button type="button" class="btn-attach" title="Chèn GIF" onclick="app.openGifPicker('post')">GIF</button>
-            <!-- Chọn chế độ hiển thị bài đăng -->
+          </div>
+          <div class="post-publish-actions">
             <select id="postVisibilitySelect" class="post-visibility-select" title="Quyền riêng tư">
               <option value="PUBLIC">🌐 Công khai</option>
               <option value="FRIENDS">👥 Bạn bè</option>
               <option value="PRIVATE">🔒 Chỉ mình tôi</option>
             </select>
+            <button type="button" class="btn-primary" id="createPostButton" onclick="app.createPost()">
+              ✍️ Đăng bài viết
+            </button>
           </div>
-          <button class="btn-primary" onclick="app.createPost()">
-            ✍️ Đăng bài viết
-          </button>
         </div>
       </div>
 
@@ -433,6 +434,14 @@
         <button class="auth-tab" id="tabRegisterBtn" onclick="app.switchAuthTab('register')">Đăng Ký</button>
       </div>
 
+      <label class="auth-legal-consent">
+        <input type="checkbox" id="acceptLegalTerms">
+        <span>Tôi đã đọc và đồng ý với
+          <a href="terms.html" target="_blank" rel="noopener noreferrer">Điều khoản sử dụng</a> và
+          <a href="privacy.html" target="_blank" rel="noopener noreferrer">Chính sách quyền riêng tư</a>.
+        </span>
+      </label>
+
       <!-- FORM ĐĂNG NHẬP: BẮT NGƯỜI DÙNG TỰ NHẬP, KHÔNG ĐIỀN TRƯỚC -->
       <div id="loginFormContainer">
         <div class="form-group">
@@ -483,7 +492,7 @@
           <label>Xác nhận mật khẩu</label>
           <input type="password" id="regConfirmPassword" placeholder="Nhập lại mật khẩu ở trên">
         </div>
-        <button class="btn-primary btn-full" onclick="app.sendRegisterOtp()">
+        <button type="button" class="btn-primary btn-full" onclick="app.handleRegisterStep1()">
           📩 Nhận mã xác thực qua Gmail
         </button>
       </div>
@@ -500,24 +509,24 @@
 
         <!-- 6 ô số hoàn toàn để trống để người dùng tự nhập -->
         <div class="otp-container">
-          <input type="text" maxlength="1" class="otp-box" id="otp1" oninput="app.onOtpInput(this, 'otp2')">
-          <input type="text" maxlength="1" class="otp-box" id="otp2" oninput="app.onOtpInput(this, 'otp3')">
-          <input type="text" maxlength="1" class="otp-box" id="otp3" oninput="app.onOtpInput(this, 'otp4')">
-          <input type="text" maxlength="1" class="otp-box" id="otp4" oninput="app.onOtpInput(this, 'otp5')">
-          <input type="text" maxlength="1" class="otp-box" id="otp5" oninput="app.onOtpInput(this, 'otp6')">
-          <input type="text" maxlength="1" class="otp-box" id="otp6" oninput="app.onOtpInput(this, null)">
+          <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" class="otp-box" id="otp1" oninput="app.onOtpInput(this, 'otp2')">
+          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp2" oninput="app.onOtpInput(this, 'otp3')">
+          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp3" oninput="app.onOtpInput(this, 'otp4')">
+          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp4" oninput="app.onOtpInput(this, 'otp5')">
+          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp5" oninput="app.onOtpInput(this, 'otp6')">
+          <input type="text" inputmode="numeric" maxlength="1" class="otp-box" id="otp6" oninput="app.onOtpInput(this, null)">
         </div>
 
         <div class="otp-timer">
           Mã có hiệu lực trong: <span id="otpCountdown">05:00</span>
         </div>
 
-        <button class="btn-primary btn-full" onclick="app.verifyOtpAndRegister()">
+        <button type="button" class="btn-primary btn-full" onclick="app.handleVerifyOtpAndRegister()">
           ✅ Xác nhận & Hoàn tất đăng ký
         </button>
 
         <div style="text-align: center; margin-top: 1rem; font-size: 0.85rem;">
-          Không nhận được mã? <span class="otp-resend" onclick="app.sendRegisterOtp()">Gửi lại mã</span>
+          Không nhận được mã? <span class="otp-resend" onclick="app.handleRegisterStep1()">Gửi lại mã</span>
           <br>
           <span style="font-size: 0.8rem; color: var(--text-muted); cursor: pointer;" onclick="app.backToRegisterStep1()">← Quay lại sửa thông tin</span>
         </div>
@@ -1011,6 +1020,6 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261110-admin2"></script>
+  <script src="js/app.js?v=20261114-authfix1"></script>
 </body>
 </html>

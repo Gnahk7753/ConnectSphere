@@ -98,6 +98,11 @@ static std::string getJsonStringSafe(const json& j, const std::string& key, cons
     return defVal;
 }
 
+static bool hasAcceptedLegalTerms(const json& body) {
+    return body.contains("accept_terms") && body["accept_terms"].is_boolean() &&
+           body["accept_terms"].get<bool>();
+}
+
 static size_t getBase64DataUrlSize(const std::string& value) {
     const size_t comma = value.find(',');
     if (comma == std::string::npos || value.substr(0, comma).find(";base64") == std::string::npos) return 0;
@@ -656,6 +661,10 @@ int main() {
             const std::string ip = clientIp(req);
             if (!gRate.allow("otp-ip:" + ip, 5, 1.0 / 120)) { sendTooMany(res, 120, "Bạn yêu cầu mã quá nhiều lần. Vui lòng thử lại sau vài phút."); return; }
             auto body = json::parse(req.body);
+            if (!hasAcceptedLegalTerms(body)) {
+                sendJsonError(res, 400, "Vui lòng đồng ý với Chính sách quyền riêng tư và Điều khoản sử dụng trước khi tiếp tục.");
+                return;
+            }
             const std::string email = sec::toLowerAscii(trimStr(getJsonStringSafe(body, "email")));
             const std::string purpose = getJsonStringSafe(body, "purpose", "REGISTER");
 
@@ -669,7 +678,7 @@ int main() {
             const std::string otpCode = SmtpService::generate6DigitOtp();
             if (!db.saveOtp(email, otpCode, purpose, 300)) { sendJsonError(res, 500, "Không thể tạo mã xác thực. Vui lòng thử lại."); return; }
             if (!SmtpService::sendOtpEmail(email, otpCode, "Xác thực đăng ký tài khoản")) {
-                sendJsonError(res, 503, "Máy chủ chưa cấu hình gửi email nên chưa thể gửi mã xác thực.");
+                sendJsonError(res, 503, "Không gửi được mã OTP. Kiểm tra cấu hình SMTP_EMAIL, SMTP_PASSWORD và Gmail App Password trên máy chủ.");
                 return;
             }
             json resp = {{"status", "ok"}, {"message", "Mã xác thực 6 chữ số đã được gửi tới: " + email}};
@@ -689,6 +698,10 @@ int main() {
             if (!gRate.allow("regtry-ip:" + ip, 20, 20.0 / 3600)) { sendTooMany(res, 600); return; }
             if (!gRate.peek("reg-ip:" + ip, maxPerDay, maxPerDay / 86400.0)) { sendTooMany(res, 3600, "Địa chỉ này đã đăng ký quá nhiều tài khoản hôm nay. Vui lòng thử lại sau."); return; }
             auto body = json::parse(req.body);
+            if (!hasAcceptedLegalTerms(body)) {
+                sendJsonError(res, 400, "Vui lòng đồng ý với Chính sách quyền riêng tư và Điều khoản sử dụng trước khi tiếp tục.");
+                return;
+            }
             const std::string email = sec::toLowerAscii(trimStr(getJsonStringSafe(body, "email")));
             const std::string code = trimStr(getJsonStringSafe(body, "code"));
             const std::string username = trimStr(getJsonStringSafe(body, "username"));
@@ -746,6 +759,10 @@ int main() {
         try {
             const std::string ip = clientIp(req);
             auto body = json::parse(req.body);
+            if (!hasAcceptedLegalTerms(body)) {
+                sendJsonError(res, 400, "Vui lòng đồng ý với Chính sách quyền riêng tư và Điều khoản sử dụng trước khi tiếp tục.");
+                return;
+            }
             const std::string identifier = trimStr(getJsonStringSafe(body, "identifier"));
             const std::string password = getJsonStringSafe(body, "password");
             if (identifier.empty() || password.empty() || identifier.size() > 254 || password.size() > 128) {
@@ -808,6 +825,10 @@ int main() {
             const std::string ip = clientIp(req);
             if (!gRate.allow("google-ip:" + ip, 10, 10.0 / 300)) { sendTooMany(res, 30); return; }
             auto body = json::parse(req.body);
+            if (!hasAcceptedLegalTerms(body)) {
+                sendJsonError(res, 400, "Vui lòng đồng ý với Chính sách quyền riêng tư và Điều khoản sử dụng trước khi tiếp tục.");
+                return;
+            }
             const std::string credential = getJsonStringSafe(body, "credential");
             if (credential.size() < 20 || credential.size() > 4096) { sendJsonError(res, 400, "Thông tin tài khoản Google không hợp lệ!"); return; }
             for (unsigned char c : credential) {

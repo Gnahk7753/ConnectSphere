@@ -34,8 +34,14 @@ private:
     static std::string getCurrentTimeStr() {
         auto now = std::chrono::system_clock::now();
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
+        std::tm utcTime{};
+#ifdef _WIN32
+        gmtime_s(&utcTime, &in_time_t);
+#else
+        gmtime_r(&in_time_t, &utcTime);
+#endif
         std::stringstream ss;
-        ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
+        ss << std::put_time(&utcTime, "%Y-%m-%d %H:%M:%S");
         return ss.str();
     }
 

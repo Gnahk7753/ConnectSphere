@@ -128,7 +128,9 @@ class AppClient {
     this.feedOffset = 0;
     this.feedHasMore = true;
     this.isLoadingFeed = false;
+    this.isAppendingDeferredFeedPosts = false;
     this.deferredFeedPostIds = [];
+    this.isCreatingPost = false;
     this.profileLimit = 5;
     this.profileOffset = 0;
     this.profileHasMore = true;
@@ -1006,11 +1008,8 @@ class AppClient {
   // =========================================================================
   formatTimeAgo(timestamp) {
     if (!timestamp) return 'Vừa xong';
-    // timestamp: "YYYY-MM-DD HH:MM:SS"
-    const parts = timestamp.split(/[- :]/);
-    if (parts.length < 6) return timestamp;
-
-    const postDate = new Date(parts[0], parts[1] - 1, parts[2], parts[3], parts[4], parts[5]);
+    const postDate = this.parseServerTimestamp(timestamp);
+    if (!Number.isFinite(postDate.getTime())) return timestamp;
     const now = new Date();
     const diffSec = Math.floor((now.getTime() - postDate.getTime()) / 1000);
 
@@ -1029,8 +1028,16 @@ class AppClient {
       const months = Math.floor(diffSec / (30 * 86400));
       return `${months} tháng trước`;
     } else {
-      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      return `${postDate.getDate()}/${postDate.getMonth() + 1}/${postDate.getFullYear()}`;
     }
+  }
+
+  parseServerTimestamp(timestamp) {
+    const value = String(timestamp || '').trim();
+    if (!value) return new Date(NaN);
+    const isoValue = value.includes('T') ? value : value.replace(' ', 'T');
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(isoValue);
+    return new Date(hasTimezone ? isoValue : `${isoValue}Z`);
   }
 
   // =========================================================================
@@ -1145,30 +1152,37 @@ class AppClient {
   }
 
   async appendDeferredFeedPosts(container) {
-    if (!container || !this.deferredFeedPostIds.length) return;
+    if (!container || !this.deferredFeedPostIds.length || this.isAppendingDeferredFeedPosts) return;
 
-    for (const postId of [...this.deferredFeedPostIds]) {
-      if (document.getElementById(`post-${postId}`)) {
-        this.deferredFeedPostIds = this.deferredFeedPostIds.filter(id => id !== postId);
-        continue;
-      }
-
-      try {
-        const res = await fetch(`/api/posts/detail?id=${encodeURIComponent(postId)}&current_user_id=${this.currentUser ? this.currentUser.id : ''}`);
-        const data = await res.json();
-        if (data.status !== 'ok' || !data.post) {
-          throw new Error(data.message || `Không thể tải bài viết ${postId}`);
+    this.isAppendingDeferredFeedPosts = true;
+    try {
+      for (const postId of [...new Set(this.deferredFeedPostIds)]) {
+        if (document.getElementById(`post-${postId}`)) {
+          this.deferredFeedPostIds = this.deferredFeedPostIds.filter(id => id !== postId);
+          continue;
         }
 
-        const markup = this.renderPostCard(data.post);
-        if (!container.querySelector('.post-card')) container.innerHTML = '';
-        const loader = document.getElementById('feedScrollLoader');
-        if (loader) loader.insertAdjacentHTML('beforebegin', markup);
-        else container.insertAdjacentHTML('beforeend', markup);
-        this.deferredFeedPostIds = this.deferredFeedPostIds.filter(id => id !== postId);
-      } catch (err) {
-        console.error('Lỗi tải bài vừa đăng vào bảng tin:', err);
+        try {
+          const res = await fetch(`/api/posts/detail?id=${encodeURIComponent(postId)}&current_user_id=${this.currentUser ? this.currentUser.id : ''}`);
+          const data = await res.json();
+          if (data.status !== 'ok' || !data.post) {
+            throw new Error(data.message || `Không thể tải bài viết ${postId}`);
+          }
+
+          if (!document.getElementById(`post-${postId}`)) {
+            const markup = this.renderPostCard(data.post);
+            if (!container.querySelector('.post-card')) container.innerHTML = '';
+            const loader = document.getElementById('feedScrollLoader');
+            if (loader) loader.insertAdjacentHTML('beforebegin', markup);
+            else container.insertAdjacentHTML('beforeend', markup);
+          }
+          this.deferredFeedPostIds = this.deferredFeedPostIds.filter(id => id !== postId);
+        } catch (err) {
+          console.error('Lỗi tải bài vừa đăng vào bảng tin:', err);
+        }
       }
+    } finally {
+      this.isAppendingDeferredFeedPosts = false;
     }
   }
 
@@ -1841,6 +1855,7 @@ class AppClient {
   }
 
   async createPost() {
+    if (this.isCreatingPost) return;
     const titleInput = document.getElementById('postTitleInput');
     const input = document.getElementById('postContentInput');
     const visibilitySelect = document.getElementById('postVisibilitySelect');
@@ -1854,6 +1869,9 @@ class AppClient {
       return;
     }
 
+    this.isCreatingPost = true;
+    const createButton = document.getElementById('createPostButton');
+    if (createButton) createButton.disabled = true;
     try {
       const res = await fetch('/api/posts/create', {
         method: 'POST',
@@ -1875,7 +1893,8 @@ class AppClient {
         if (input) input.value = '';
         this.clearPostMedia();
         if (data.post_id && document.getElementById('postsList') &&
-            !window.location.pathname.includes('profile.html')) {
+            !window.location.pathname.includes('profile.html') &&
+            !this.deferredFeedPostIds.includes(data.post_id)) {
           this.deferredFeedPostIds.push(data.post_id);
         }
       } else {
@@ -1883,6 +1902,9 @@ class AppClient {
       }
     } catch (err) {
       this.showToast('Lỗi: ' + err.message, 'error');
+    } finally {
+      this.isCreatingPost = false;
+      if (createButton) createButton.disabled = false;
     }
   }
 
@@ -4746,7 +4768,7 @@ class AppClient {
   formatActivityStatus(isOnline, lastActiveAt) {
     if (isOnline) return 'Đang hoạt động';
     if (!lastActiveAt) return '';
-    const t = new Date(lastActiveAt.replace(' ', 'T')).getTime();
+    const t = this.parseServerTimestamp(lastActiveAt).getTime();
     if (isNaN(t)) return '';
     const diffSec = Math.floor((Date.now() - t) / 1000);
     const diffMin = Math.max(1, Math.floor(diffSec / 60));
@@ -6191,10 +6213,10 @@ class AppClient {
     }
 
     // Nhóm tin nhắn theo người gửi và thời gian (Hình 1)
-    const isSameSenderAsPrev = prevMsg && (prevMsg.sender_id === m.sender_id) && prevMsg.created_at && m.created_at && 
-      (Math.abs(new Date(m.created_at.replace(' ', 'T')) - new Date(prevMsg.created_at.replace(' ', 'T'))) < 5 * 60 * 1000);
-    const isSameSenderAsNext = nextMsg && (nextMsg.sender_id === m.sender_id) && nextMsg.created_at && m.created_at && 
-      (Math.abs(new Date(nextMsg.created_at.replace(' ', 'T')) - new Date(m.created_at.replace(' ', 'T'))) < 5 * 60 * 1000);
+    const isSameSenderAsPrev = prevMsg && (prevMsg.sender_id === m.sender_id) && prevMsg.created_at && m.created_at &&
+      (Math.abs(this.parseServerTimestamp(m.created_at) - this.parseServerTimestamp(prevMsg.created_at)) < 5 * 60 * 1000);
+    const isSameSenderAsNext = nextMsg && (nextMsg.sender_id === m.sender_id) && nextMsg.created_at && m.created_at &&
+      (Math.abs(this.parseServerTimestamp(nextMsg.created_at) - this.parseServerTimestamp(m.created_at)) < 5 * 60 * 1000);
 
     const isSingle = !isSameSenderAsPrev && !isSameSenderAsNext;
     const isFirst = !isSameSenderAsPrev && isSameSenderAsNext;
@@ -6292,8 +6314,8 @@ class AppClient {
     }
 
     // Mốc thời gian nằm trên tin đầu tiên sau khoảng nghỉ ít nhất 3 phút.
-    const previousTime = prevMsg?.created_at ? new Date(prevMsg.created_at.replace(' ', 'T')).getTime() : NaN;
-    const currentTime = m.created_at ? new Date(m.created_at.replace(' ', 'T')).getTime() : NaN;
+    const previousTime = prevMsg?.created_at ? this.parseServerTimestamp(prevMsg.created_at).getTime() : NaN;
+    const currentTime = m.created_at ? this.parseServerTimestamp(m.created_at).getTime() : NaN;
     const showTime = !Number.isFinite(previousTime) || !Number.isFinite(currentTime) || currentTime - previousTime >= 3 * 60 * 1000;
     const timeStr = m.created_at ? this.formatChatMessageTime(m.created_at) : '';
     const timeHtml = showTime ? `<div class="message-time" title="${this.escapeHtml(this.formatChatMessageTooltip(m.created_at))}">${this.escapeHtml(timeStr)}</div>` : '';
@@ -6344,7 +6366,7 @@ class AppClient {
   }
 
   formatChatMessageTime(timestamp) {
-    const date = new Date(String(timestamp || '').replace(' ', 'T'));
+    const date = this.parseServerTimestamp(timestamp);
     if (!Number.isFinite(date.getTime())) return '';
     const now = new Date();
     const age = now.getTime() - date.getTime();
@@ -6358,7 +6380,7 @@ class AppClient {
   }
 
   formatChatMessageTooltip(timestamp) {
-    const date = new Date(String(timestamp || '').replace(' ', 'T'));
+    const date = this.parseServerTimestamp(timestamp);
     if (!Number.isFinite(date.getTime())) return '';
     const weekdays = ['Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư', 'Thứ năm', 'Thứ sáu', 'Thứ bảy'];
     const hour = date.getHours();
@@ -6751,7 +6773,7 @@ class AppClient {
   handleRecallClick(msgId, createdAt) {
     this.closeAllMessageDropdowns();
     if (createdAt) {
-      const msgTime = new Date(createdAt.replace(' ', 'T')).getTime();
+      const msgTime = this.parseServerTimestamp(createdAt).getTime();
       const now = Date.now();
       if ((now - msgTime) > 5 * 60 * 1000) {
         // Quá 5 phút: HIỂN THỊ THÔNG BÁO GIỮA MÀN HÌNH (Hình 2 theo yêu cầu)
@@ -8386,10 +8408,19 @@ class AppClient {
     document.getElementById('tabRegisterBtn')?.classList.toggle('active', tab === 'register');
     document.getElementById('loginFormContainer').style.display = (tab === 'login') ? 'block' : 'none';
     document.getElementById('registerStep1Container').style.display = (tab === 'register') ? 'block' : 'none';
-    document.getElementById('otpVerificationContainer').style.display = 'none';
+    document.getElementById('registerStep2Container').style.display = 'none';
+  }
+
+  ensureLegalTermsAccepted() {
+    const checkbox = document.getElementById('acceptLegalTerms');
+    if (checkbox && checkbox.checked) return true;
+    this.showToast('Vui lòng đồng ý với Điều khoản sử dụng và Chính sách quyền riêng tư để tiếp tục.', 'error');
+    checkbox?.focus();
+    return false;
   }
 
   async handleLogin() {
+    if (!this.ensureLegalTermsAccepted()) return;
     const id = document.getElementById('loginIdentifier').value.trim();
     const pass = document.getElementById('loginPassword').value;
 
@@ -8402,7 +8433,7 @@ class AppClient {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: id, password: pass })
+        body: JSON.stringify({ identifier: id, password: pass, accept_terms: true })
       });
       const data = await res.json();
       if (data.status === 'ok') {
@@ -8421,6 +8452,7 @@ class AppClient {
   }
 
   async handleRegisterStep1() {
+    if (!this.ensureLegalTermsAccepted()) return;
     const fn = document.getElementById('regFullname').value.trim();
     const un = document.getElementById('regUsername').value.trim();
     const em = document.getElementById('regEmail').value.trim();
@@ -8443,14 +8475,14 @@ class AppClient {
       const res = await fetch('/api/auth/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: em, purpose: 'REGISTER' })
+        body: JSON.stringify({ email: em, purpose: 'REGISTER', accept_terms: true })
       });
       const data = await res.json();
       if (data.status === 'ok') {
         this.showToast(data.message, 'success');
         document.getElementById('registerStep1Container').style.display = 'none';
-        document.getElementById('otpVerificationContainer').style.display = 'block';
-        document.getElementById('otpTargetEmail').textContent = em;
+        document.getElementById('registerStep2Container').style.display = 'block';
+        document.getElementById('otpDisplayEmail').textContent = em;
 
         // Bắt đầu đếm ngược OTP
         this.startOtpTimer(300);
@@ -8465,7 +8497,8 @@ class AppClient {
   startOtpTimer(seconds) {
     if (this.otpTimerInterval) clearInterval(this.otpTimerInterval);
     let left = seconds;
-    const timerSpan = document.getElementById('otpTimer');
+    const timerSpan = document.getElementById('otpCountdown');
+    if (timerSpan) timerSpan.textContent = `${Math.floor(left / 60)}:${left % 60 < 10 ? '0' : ''}${left % 60}`;
     this.otpTimerInterval = setInterval(() => {
       left--;
       if (timerSpan) {
@@ -8475,11 +8508,27 @@ class AppClient {
       }
       if (left <= 0) {
         clearInterval(this.otpTimerInterval);
+        this.otpTimerInterval = null;
       }
     }, 1000);
   }
 
+  onOtpInput(input, nextId) {
+    input.value = input.value.replace(/\D/g, '').slice(0, 1);
+    if (input.value && nextId) document.getElementById(nextId)?.focus();
+  }
+
+  backToRegisterStep1() {
+    if (this.otpTimerInterval) {
+      clearInterval(this.otpTimerInterval);
+      this.otpTimerInterval = null;
+    }
+    document.getElementById('registerStep2Container').style.display = 'none';
+    document.getElementById('registerStep1Container').style.display = 'block';
+  }
+
   async handleVerifyOtpAndRegister() {
+    if (!this.ensureLegalTermsAccepted()) return;
     const b1 = document.getElementById('otp1').value;
     const b2 = document.getElementById('otp2').value;
     const b3 = document.getElementById('otp3').value;
@@ -8499,7 +8548,8 @@ class AppClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...this.tempRegisterData,
-          code: code
+          code: code,
+          accept_terms: true
         })
       });
       const data = await res.json();
@@ -8517,6 +8567,7 @@ class AppClient {
   }
 
   openGoogleAuthModal() {
+    if (!this.ensureLegalTermsAccepted()) return;
     const modal = document.getElementById('googleAuthModal');
     if (modal) modal.style.display = 'flex';
     this.triggerRealGoogleSignIn();
@@ -8582,6 +8633,10 @@ class AppClient {
   }
 
   async handleGoogleCredentialResponse(response) {
+    if (!this.ensureLegalTermsAccepted()) {
+      window.google?.accounts?.id?.cancel();
+      return;
+    }
     if (!response || !response.credential) {
       this.showToast('Google không trả về thông tin xác thực. Vui lòng thử lại.', 'error');
       return;
@@ -8590,7 +8645,7 @@ class AppClient {
       const res = await fetch('/api/auth/google-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: response.credential })
+        body: JSON.stringify({ credential: response.credential, accept_terms: true })
       });
       const data = await res.json();
       if (data.status === 'ok') {

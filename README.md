@@ -5,6 +5,7 @@ ConnectSphere là ứng dụng mạng xã hội mini, cung cấp các chức nă
 ## Tính năng
 
 - **Tài khoản và hồ sơ:** đăng ký, đăng nhập, xác thực email bằng OTP và quản lý trang cá nhân.
+- **Quyền riêng tư:** người dùng cần đồng ý Điều khoản sử dụng và Chính sách quyền riêng tư trước khi đăng nhập hoặc đăng ký.
 - **Bảng tin:** đăng bài, chia sẻ hình ảnh/video, bày tỏ cảm xúc và bình luận, bao gồm phản hồi bình luận.
 - **Kết nối bạn bè:** gửi và xử lý lời mời kết bạn, tìm kiếm người dùng và xem gợi ý kết bạn.
 - **Nhóm cộng đồng:** tạo nhóm, tham gia nhóm và đăng bài trong nhóm.
@@ -69,6 +70,8 @@ Có thể truyền cấu hình qua biến môi trường hoặc file `.env` cụ
 | `GOOGLE_CLIENT_ID` | Cấu hình Google Sign-In |
 | `ADMIN_PASSWORD` | Đặt mật khẩu tài khoản quản trị |
 | `SEED_DEMO_DATA=1` | Nạp dữ liệu mẫu khi khởi tạo cơ sở dữ liệu trống |
+
+Để gửi OTP qua Gmail, `SMTP_PASSWORD` phải là **Google App Password** (cần bật xác minh 2 bước), không phải mật khẩu đăng nhập Gmail thông thường.
 
 Không đưa `.env`, mật khẩu hoặc API key vào repository.
 
