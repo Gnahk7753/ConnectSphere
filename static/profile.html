@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Trang cá nhân - ConnectSphere</title>
   <script>if (localStorage.getItem('cs_theme') === 'dark') document.documentElement.dataset.theme = 'dark';</script>
-  <link rel="stylesheet" href="css/style.css?v=20261114-theme-fix2">
+  <link rel="stylesheet" href="css/style.css?v=20261115-nav-help">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
 </head>
 <body>
@@ -582,7 +582,7 @@
 
   <!-- SCRIPTS -->
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261115-auth-moderation"></script>
+  <script src="js/app.js?v=20261115-profile-id-fix"></script>
   <script>
     // Tab switching in profile page
     function switchProfileTab(tab) {
@@ -604,10 +604,16 @@
       }
     }
 
+    const requestedProfileId = new URLSearchParams(window.location.search).get("id");
+    if (/^ACC\d+$/i.test(requestedProfileId || '')) {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('id');
+      window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+    }
+
     // Load profile page when DOM ready (tự động đợi app sẵn sàng, tránh race condition)
     function runProfileInit() {
-      const urlParams = new URLSearchParams(window.location.search);
-      const targetUserId = urlParams.get("id");
+      const targetUserId = requestedProfileId || new URLSearchParams(window.location.search).get("id");
       if (window.app && window.app.initProfilePage) {
         window.app.initProfilePage(targetUserId);
       } else {

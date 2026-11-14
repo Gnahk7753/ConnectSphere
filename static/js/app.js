@@ -50,6 +50,8 @@ class AppClient {
   constructor() {
     this.currentUser = null;
     this.currentChatPartner = null; // Có thể là User hoặc Group { id, name, avatar, isGroup }
+    this.giphyApiKey = '';
+    this.giphyApiKeyPromise = null;
     this.oldestMessageId = 0;
     this.hasMoreMessages = false;
     this.isLoadingOlderMessages = false;
@@ -3208,6 +3210,13 @@ class AppClient {
       await this.openCommentModal(postId);
       return;
     }
+    if (linkedUrl.pathname.endsWith('/profile.html')) {
+      const profileId = linkedUrl.searchParams.get('id') || '';
+      if (/^ACC\d+$/i.test(profileId)) {
+        await this.openUserProfile(profileId);
+        return;
+      }
+    }
     window.location.href = link;
   }
 
@@ -3432,20 +3441,39 @@ class AppClient {
   // =========================================================================
   // 10. TRANG PROFILE RIÊNG BIỆT (profile.html?id=...)
   // =========================================================================
-  openUserProfile(targetUserId) {
+  async openUserProfile(targetUserId) {
     if (!targetUserId) return;
     if (typeof targetUserId === 'object') {
       if (targetUserId.isGroup) return;
       targetUserId = targetUserId.user_token || targetUserId.id;
     }
     if (!targetUserId) return;
+
+    if (/^ACC\d+$/i.test(String(targetUserId))) {
+      try {
+        const res = await fetch(`/api/users/profile?id=${encodeURIComponent(targetUserId)}`);
+        const data = await res.json();
+        if (!res.ok || data.status !== 'ok' || !data.user?.user_token) {
+          throw new Error(data.message || 'Không thể lấy liên kết hồ sơ an toàn.');
+        }
+        targetUserId = data.user.user_token;
+      } catch (error) {
+        console.error('Không thể mở hồ sơ người dùng:', error);
+        this.showToast(error.message || 'Không thể mở hồ sơ người dùng.', 'error');
+        return;
+      }
+    }
+
     window.location.href = `profile.html?id=${encodeURIComponent(targetUserId)}`;
   }
 
   openMyProfile() {
     if (!this.currentUser) return;
-    // Dùng user_token (chuỗi ngẫu nhiên) trên URL thay vì ID nội bộ dạng ACC...
     const uid = this.currentUser.user_token || this.currentUser.id;
+    if (/^ACC\d{6}$/i.test(uid)) {
+      this.openUserProfile(uid);
+      return;
+    }
     if (window.location.pathname.includes('profile.html')) {
       window.history.pushState({}, '', `profile.html?id=${encodeURIComponent(uid)}`);
       this.initProfilePage(uid);
@@ -3497,7 +3525,12 @@ class AppClient {
           }
         }
         document.getElementById('profFullname').textContent = u.fullname;
-        document.getElementById('profUsername').textContent = '@' + u.username;
+        const usernameEl = document.getElementById('profUsername');
+        if (usernameEl) {
+          const isInternalId = /^ACC\d{6}$/i.test(u.username || '');
+          usernameEl.textContent = isInternalId ? '' : '@' + u.username;
+          usernameEl.hidden = isInternalId;
+        }
         document.getElementById('profBio').textContent = u.bio || 'Chưa cập nhật tiểu sử';
         document.getElementById('profHometown').textContent = u.hometown || '--';
         if (document.getElementById('profResidence')) document.getElementById('profResidence').textContent = u.residence || '--';
@@ -3763,7 +3796,7 @@ class AppClient {
       }
       grid.innerHTML = list.map(u => `
         <div class="friend-card" style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:12px;padding:1rem;display:flex;flex-direction:column;gap:.6rem;">
-          <div style="display:flex;gap:.75rem;align-items:center;cursor:pointer;" onclick="app.openUserProfile({id:${app.jsArg(u.id)},name:${app.jsArg(u.fullname || '')},avatar:${app.jsArg(u.avatar || '')}})">
+          <div style="display:flex;gap:.75rem;align-items:center;cursor:pointer;" onclick="app.openUserProfile({id:${app.jsArg(u.id)},user_token:${app.jsArg(u.user_token || '')},name:${app.jsArg(u.fullname || '')},avatar:${app.jsArg(u.avatar || '')}})">
             <img src="${this.escapeHtml(u.avatar || '/img/default-avatar.svg')}" style="width:56px;height:56px;border-radius:50%;object-fit:cover;" onerror="this.src='/img/default-avatar.svg'">
             <div style="min-width:0;">
               <div style="font-weight:700;">${this.escapeHtml(u.fullname || 'Người dùng')}</div>
@@ -7476,11 +7509,44 @@ class AppClient {
   }
 
   openSupportModal() {
-    const modal = document.getElementById('supportModal');
-    if (modal) {
-      document.getElementById('supportDetailInput').value = '';
-      modal.style.display = 'flex';
+    let modal = document.getElementById('supportModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.className = 'modal-overlay';
+      modal.id = 'supportModal';
+      modal.style.display = 'none';
+      modal.innerHTML = `
+        <div class="auth-card" style="max-width: 480px;">
+          <div class="auth-header">
+            <h2>🛠️ Báo Cáo Sự Cố &amp; Hỗ Trợ</h2>
+            <p>Gửi phản ánh hoặc yêu cầu trợ giúp trực tiếp tới Quản trị viên</p>
+          </div>
+          <div class="form-group">
+            <label for="supportCategorySelect">Loại sự cố / yêu cầu:</label>
+            <select id="supportCategorySelect">
+              <option value="Lỗi tính năng hệ thống">Lỗi tính năng hệ thống</option>
+              <option value="Sự cố tài khoản / Đăng nhập">Sự cố tài khoản / Đăng nhập</option>
+              <option value="Báo cáo lỗi giao diện / Hiển thị">Báo cáo lỗi giao diện / Hiển thị</option>
+              <option value="Đóng góp ý kiến nâng cấp">Đóng góp ý kiến nâng cấp</option>
+              <option value="Yêu cầu hỗ trợ khác">Yêu cầu hỗ trợ khác...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="supportDetailInput">Mô tả chi tiết vấn đề bạn gặp phải:</label>
+            <textarea id="supportDetailInput" rows="4" placeholder="Vui lòng mô tả cụ thể sự cố để Quản trị viên xử lý sớm nhất..."></textarea>
+          </div>
+          <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+            <button type="button" class="btn-secondary" style="flex: 1;" onclick="app.closeSupportModal()">Hủy</button>
+            <button type="button" class="btn-primary" style="flex: 1;" onclick="app.submitSupportReport()">Gửi báo cáo</button>
+          </div>
+        </div>`;
+      modal.addEventListener('click', event => {
+        if (event.target === modal) this.closeSupportModal();
+      });
+      document.body.appendChild(modal);
     }
+    document.getElementById('supportDetailInput').value = '';
+    modal.style.display = 'flex';
   }
 
   closeSupportModal() {
@@ -9512,16 +9578,34 @@ class AppClient {
     document.getElementById('gifPickerOverlay')?.classList.remove('show');
   }
 
+  async getGiphyApiKey() {
+    if (!this.giphyApiKeyPromise) {
+      this.giphyApiKeyPromise = fetch('/api/giphy/config', { cache: 'no-store' }).then(async res => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || `Không lấy được cấu hình GIPHY (HTTP ${res.status}).`);
+        if (data.status !== 'ok' || !data.api_key) throw new Error('Máy chủ chưa cấu hình GIPHY_API_KEY.');
+        this.giphyApiKey = data.api_key;
+        return this.giphyApiKey;
+      });
+    }
+    try {
+      return await this.giphyApiKeyPromise;
+    } catch (error) {
+      this.giphyApiKeyPromise = null;
+      throw error;
+    }
+  }
+
   async searchGifs(query) {
     const box = document.getElementById('gifResults');
     if (!box) return;
     box.innerHTML = '<div class="gif-loading">Đang tải...</div>';
     const q = (query || '').trim();
-    const key = window.GIPHY_API_KEY || 'dc6zaTOxFJmzC';
-    const url = q
-      ? `https://api.giphy.com/v1/gifs/search?api_key=${key}&q=${encodeURIComponent(q)}&limit=24&rating=pg-13`
-      : `https://api.giphy.com/v1/gifs/trending?api_key=${key}&limit=24&rating=pg-13`;
     try {
+      const key = await this.getGiphyApiKey();
+      const url = q
+        ? `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(key)}&q=${encodeURIComponent(q)}&limit=24&rating=pg-13`
+        : `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(key)}&limit=24&rating=pg-13`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`GIPHY trả về lỗi HTTP ${res.status}.`);
       const data = await res.json();
@@ -9537,7 +9621,7 @@ class AppClient {
       box.innerHTML = items.map(g => this._gifItemHtml(g)).join('');
     } catch (error) {
       console.error('Không thể tải GIF từ GIPHY:', error);
-      box.innerHTML = '<div class="gif-error">Không thể tải GIF từ GIPHY. Kiểm tra kết nối hoặc API key rồi thử lại.</div>';
+      box.innerHTML = `<div class="gif-error">${this.escapeHtml(error.message || 'Không thể tải GIF từ GIPHY.')}</div>`;
     }
   }
 
@@ -9686,6 +9770,12 @@ function installMobilePrimaryNavigation() {
         </button>
         <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); app.toggleTheme()">
           <span aria-hidden="true">🌙</span> Đổi chế độ sáng/tối
+        </button>
+        <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); app.openHelpCenter()">
+          <span aria-hidden="true">📚</span> Trung tâm trợ giúp
+        </button>
+        <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); app.openSupportModal()">
+          <span aria-hidden="true">🐛</span> Báo cáo sự cố
         </button>
         <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); document.getElementById('logoutBtn')?.click()">
           <span aria-hidden="true">↪</span> Đăng xuất

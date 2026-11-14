@@ -10,6 +10,7 @@ ConnectSphere là ứng dụng mạng xã hội mini, cung cấp các chức nă
 - **Kết nối bạn bè:** gửi và xử lý lời mời kết bạn, tìm kiếm người dùng và xem gợi ý kết bạn.
 - **Nhóm cộng đồng:** tạo nhóm, tham gia nhóm và đăng bài trong nhóm.
 - **Nhắn tin:** trò chuyện trực tiếp và nhắn tin nhóm.
+- **GIF bình luận:** tìm và gửi GIF qua GIPHY.
 - **Tìm kiếm và thông báo:** tìm người dùng, nhóm, bài viết; nhận thông báo về các hoạt động liên quan.
 - **Quản trị:** bảng điều khiển quản trị hỗ trợ theo dõi hoạt động và xử lý báo cáo.
 - **Tích hợp:** Google Sign-In dùng để tạo tài khoản và đăng nhập; Gemini hỗ trợ kiểm duyệt nội dung khi được cấu hình.
@@ -54,6 +55,7 @@ Dự án có thể build trên Linux bằng CMake và deploy trên Render qua Do
    - `COOKIE_SECURE=1`
    - `TRUST_PROXY=1`
    - Thêm `GOOGLE_CLIENT_ID` để bật đăng nhập/tạo tài khoản bằng Google. Có thể thêm `GEMINI_API_KEY` để bật kiểm duyệt nội dung bằng Gemini.
+   - Thêm `GIPHY_API_KEY` để bật tìm kiếm GIF trong bình luận.
 4. Để dữ liệu không mất sau khi service khởi động lại hoặc deploy, gắn persistent disk tại `/app/data`. Ứng dụng lưu SQLite tại `data/social_network.db`.
 5. Deploy. Ứng dụng tự đọc `PORT` do Render cấp; không cần đặt cổng cố định.
 
@@ -68,6 +70,7 @@ Có thể truyền cấu hình qua biến môi trường hoặc file `.env` cụ
 | `GEMINI_API_KEY` | Kết nối Gemini để kiểm duyệt bài viết, bình luận và báo cáo |
 | `GEMINI_MODEL` | Tùy chọn chọn model Gemini; mặc định `gemini-2.0-flash` |
 | `GOOGLE_CLIENT_ID` | Bắt buộc để đăng nhập Google và tạo tài khoản mới |
+| `GIPHY_API_KEY` | Bật tìm kiếm GIF trong bình luận |
 | `ADMIN_PASSWORD` | Đặt mật khẩu tài khoản quản trị |
 | `SEED_DEMO_DATA=1` | Nạp dữ liệu mẫu khi khởi tạo cơ sở dữ liệu trống |
 

@@ -173,6 +173,7 @@ static size_t gMaxVideoBytes = 30ULL * 1024 * 1024;
 static size_t gMaxImageBytes = 8ULL * 1024 * 1024;
 static std::set<std::string> gAllowedOrigins;
 static std::string gGoogleClientId;
+static std::string gGiphyApiKey;
 
 static void sendJsonError(httplib::Response& res, int status, const std::string& msg) {
     res.status = status;
@@ -586,6 +587,7 @@ int main() {
     gTrustProxy = sec::envFlag("TRUST_PROXY");
     gCookieSecure = sec::envFlag("COOKIE_SECURE");
     gGoogleClientId = sec::envOr("GOOGLE_CLIENT_ID");
+    gGiphyApiKey = sec::envOr("GIPHY_API_KEY");
     gMaxBodyBytes = static_cast<size_t>(std::max<long long>(1, sec::envInt("MAX_BODY_MB", 48))) * 1024 * 1024;
     gMaxVideoBytes = static_cast<size_t>(std::max<long long>(1, sec::envInt("MAX_VIDEO_MB", 30))) * 1024 * 1024;
     gMaxImageBytes = static_cast<size_t>(std::max<long long>(1, sec::envInt("MAX_IMAGE_MB", 8))) * 1024 * 1024;
@@ -681,6 +683,14 @@ int main() {
     // Cấu hình công khai cho frontend (Client ID của Google KHÔNG phải bí mật)
     R.Get("/api/auth/config", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(json({{"status", "ok"}, {"google_client_id", gGoogleClientId}}).dump(), "application/json; charset=utf-8");
+    });
+
+    R.Get("/api/giphy/config", [](const httplib::Request&, httplib::Response& res) {
+        if (gGiphyApiKey.empty()) {
+            sendJsonError(res, 503, "Máy chủ chưa cấu hình GIPHY_API_KEY.");
+            return;
+        }
+        res.set_content(json({{"status", "ok"}, {"api_key", gGiphyApiKey}}).dump(), "application/json; charset=utf-8");
     });
 
     // Chỉ đăng nhập bằng Google hoặc bằng thông tin tài khoản ConnectSphere.
