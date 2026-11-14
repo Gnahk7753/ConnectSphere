@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Đoạn chat - ConnectSphere</title>
-  <link rel="stylesheet" href="css/style.css?v=20261114-nav-order1">
+  <script>if (localStorage.getItem('cs_theme') === 'dark') document.documentElement.dataset.theme = 'dark';</script>
+  <link rel="stylesheet" href="css/style.css?v=20261114-theme-fix2">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
 </head>
 <body class="messenger-page">
@@ -28,7 +29,6 @@
       </a>
     </div>
     <div class="nav-right">
-      <button class="btn-icon theme-toggle" id="themeToggleBtn" title="Chuyển chế độ Sáng / Tối">🌙</button>
       <div class="user-nav-badge" id="navUserBadge" onclick="app.openMyProfile()">
         <img id="navAvatar" src="/img/default-avatar.svg" alt="Avatar">
         <span id="navFullname">Đang tải...</span>
@@ -222,6 +222,6 @@
     </div>
   </div>
   <script src="js/vietnamData.js"></script>
-  <script src="js/app.js?v=20261114-nav-order1"></script>
+  <script src="js/app.js?v=20261114-theme-fix2"></script>
 </body>
 </html>

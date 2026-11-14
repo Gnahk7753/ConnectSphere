@@ -4,22 +4,23 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Nhóm - ConnectSphere</title>
-  <link rel="stylesheet" href="css/style.css?v=20261114-nav-order1">
+  <script>if (localStorage.getItem('cs_theme') === 'dark') document.documentElement.dataset.theme = 'dark';</script>
+  <link rel="stylesheet" href="css/style.css?v=20261114-theme-fix2">
   <link rel="icon" href="img/logo.svg" type="image/svg+xml">
   <style>
     .groups-layout { display:grid; grid-template-columns:280px minmax(0,1fr); gap:16px; width:100%; max-width:1100px; margin:0 auto; padding:16px; align-items:start; }
     .groups-left { position:fixed; z-index:90; left:max(16px,calc((100vw - 1100px) / 2 + 16px)); top:76px; bottom:16px; width:280px; overflow-y:auto; scrollbar-width:thin; }
     .groups-right { grid-column:2; min-width:0; }
-    .groups-nav { background:var(--card-bg,#fff); border-radius:12px; padding:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+    .groups-nav { background:var(--bg-surface); border-radius:12px; padding:12px; box-shadow:var(--card-shadow); }
     .groups-nav button, .groups-nav a {
       display:flex; align-items:center; gap:10px; width:100%; text-align:left;
       padding:10px 12px; border:none; background:transparent; border-radius:8px;
       cursor:pointer; font-size:.92rem; color:var(--text-main); text-decoration:none;
       min-height:42px; box-sizing:border-box; transition:background-color .15s ease,color .15s ease;
     }
-    .groups-nav button:hover, .groups-nav a:hover, .groups-nav button.active { background:rgba(0,132,255,.1); color:#0084ff; }
-    .groups-nav .create-btn { background:#e7f3ff; color:#0084ff; font-weight:600; margin-top:8px; }
-    .groups-nav .create-btn:hover { background:#d8ebff; }
+    .groups-nav button:hover, .groups-nav a:hover, .groups-nav button.active { background:var(--primary-light); color:var(--primary); }
+    .groups-nav .create-btn { background:var(--primary-light); color:var(--primary); font-weight:600; margin-top:8px; }
+    .groups-nav .create-btn:hover { background:var(--bg-surface-hover); }
     .group-open-btn {
       flex:0 0 auto; border:0; border-radius:8px; padding:9px 14px;
       background:var(--primary); color:#fff; font:inherit; font-weight:600;
@@ -35,22 +36,23 @@
     .groups-load-more:disabled { opacity:.7; cursor:wait; }
     .groups-section-title { font-size:.78rem; color:var(--text-muted); margin:14px 8px 6px; font-weight:600; text-transform:uppercase; }
     .group-list-item { display:flex; gap:10px; align-items:center; padding:8px; border-radius:8px; cursor:pointer; }
-    .group-list-item:hover { background:rgba(0,0,0,.04); }
-    .group-list-item img { width:40px; height:40px; border-radius:8px; object-fit:cover; background:#eee; }
+    .group-list-item:hover { background:var(--bg-surface-hover); }
+    .group-list-item img { width:40px; height:40px; border-radius:8px; object-fit:cover; background:var(--bg-surface-secondary); }
     .group-list-item .meta { flex:1; min-width:0; }
     .group-list-item .name { font-weight:600; font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .group-list-item .sub { font-size:.75rem; color:var(--text-muted); }
-    .group-feed-card { background:var(--card-bg,#fff); border-radius:12px; padding:14px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+    .group-feed-card { background:var(--bg-surface); border-radius:12px; padding:14px; margin-bottom:12px; box-shadow:var(--card-shadow); }
     .group-feed-card .author { display:flex; gap:10px; align-items:center; margin-bottom:8px; }
     .group-feed-card .author img { width:40px; height:40px; border-radius:50%; }
     .pending-badge { display:inline-block; background:#fef3c7; color:#92400e; font-size:.72rem; padding:2px 8px; border-radius:999px; margin-left:6px; }
     .create-group-modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:9999; }
     .create-group-modal.show { display:flex; }
-    .create-group-box { background:var(--card-bg,#fff); border-radius:14px; padding:20px; width:min(420px,92vw); }
+    .create-group-box { background:var(--bg-surface); border-radius:14px; padding:20px; width:min(420px,92vw); }
     .create-group-box h3 { margin:0 0 12px; }
     .create-group-box label { display:block; font-size:.82rem; font-weight:600; margin:10px 0 4px; }
     .create-group-box input, .create-group-box textarea, .create-group-box select {
-      width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--border,#ddd); box-sizing:border-box;
+      width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--border-color); box-sizing:border-box;
+      background:var(--bg-surface-secondary); color:var(--text-main);
     }
     .create-group-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
     .create-group-actions button { min-height:40px; }
@@ -58,9 +60,9 @@
     .group-avatar-preview { width:64px; height:64px; border-radius:12px; object-fit:cover; background:var(--bg-surface-secondary); border:1px solid var(--border-color); }
     .group-avatar-file-label { display:inline-flex; align-items:center; justify-content:center; min-height:40px; padding:8px 12px; border-radius:8px; color:var(--text-main); background:var(--bg-surface-secondary); font-weight:600; cursor:pointer; }
     .group-avatar-file-label:hover { background:var(--bg-surface-hover); }
-    .composer-box { background:var(--card-bg,#fff); border-radius:12px; padding:12px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
-    .group-composer-title { width:100%; margin-bottom:8px; border:1px solid var(--border,#ddd); border-radius:8px; padding:10px; box-sizing:border-box; font:inherit; font-weight:600; color:var(--text-main); background:var(--bg-surface); }
-    .composer-box textarea { width:100%; min-height:70px; border:1px solid var(--border,#ddd); border-radius:8px; padding:8px; box-sizing:border-box; resize:vertical; }
+    .composer-box { background:var(--bg-surface); border-radius:12px; padding:12px; margin-bottom:12px; box-shadow:var(--card-shadow); }
+    .group-composer-title { width:100%; margin-bottom:8px; border:1px solid var(--border-color); border-radius:8px; padding:10px; box-sizing:border-box; font:inherit; font-weight:600; color:var(--text-main); background:var(--bg-surface-secondary); }
+    .composer-box textarea { width:100%; min-height:70px; border:1px solid var(--border-color); border-radius:8px; padding:8px; box-sizing:border-box; resize:vertical; background:var(--bg-surface-secondary); color:var(--text-main); }
     .group-post-card { gap:12px; }
     .group-post-card .post-header-left { cursor:pointer; }
     .group-post-title { margin:0 0 8px; font-size:1.15rem; line-height:1.35; }
@@ -246,7 +248,7 @@
     </div>
   </div>
 
-  <script src="js/app.js?v=20261114-nav-order1"></script>
+  <script src="js/app.js?v=20261114-theme-fix2"></script>
   <script>
     const groupsPage = {
       currentView: 'feed',

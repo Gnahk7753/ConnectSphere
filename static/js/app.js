@@ -266,12 +266,13 @@ class AppClient {
 
     const toggleBtn = document.getElementById('themeToggleBtn');
     if (toggleBtn) {
-      toggleBtn.addEventListener('click', () => {
-        const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
-        const newTheme = (currentTheme === 'light') ? 'dark' : 'light';
-        this.setTheme(newTheme);
-      });
+      toggleBtn.addEventListener('click', () => this.toggleTheme());
     }
+  }
+
+  toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+    this.setTheme(currentTheme === 'dark' ? 'light' : 'dark');
   }
 
   captureMessageScrollAnchor(msgId) {
@@ -9757,7 +9758,7 @@ function installMobilePrimaryNavigation() {
         <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); app.openEditProfileModal()">
           <span aria-hidden="true">✏️</span> Chỉnh sửa hồ sơ
         </button>
-        <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); document.getElementById('themeToggleBtn')?.click()">
+        <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); app.toggleTheme()">
           <span aria-hidden="true">🌙</span> Đổi chế độ sáng/tối
         </button>
         <button type="button" role="menuitem" onclick="document.getElementById('mobilePrimaryMenu')?.classList.remove('show'); document.getElementById('logoutBtn')?.click()">
